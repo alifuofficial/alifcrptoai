@@ -1,0 +1,1437 @@
+"use client";
+
+import React, { useState, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import {
+  Cpu,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  Activity,
+  Sliders,
+  AlertTriangle,
+  Play,
+  Pause,
+  RefreshCw,
+  LogOut,
+  Layers,
+  FileText,
+  Brain,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  EyeOff,
+  Flame,
+  Clock,
+  ArrowUpRight,
+  ArrowDownRight,
+  Zap,
+} from "lucide-react";
+
+// --- TYPES ---
+interface BotConfig {
+  id: number;
+  is_active: boolean;
+  sandbox_mode: boolean;
+  auto_apply_lessons: boolean;
+  symbols: string[];
+  active_strategies: string[];
+  timeframe: string;
+  risk_pct: number;
+  min_score: number;
+  min_rvol: number;
+  enable_breakeven_partial: boolean;
+  max_directional_exposure_pct: number;
+  max_hold_bars: number;
+  use_limit_maker_entry: boolean;
+  max_funding_rate_pct: number;
+  telegram_notifications: boolean;
+  blocked_utc_hours: number[];
+  quarantined_symbols: string[];
+  deepseek_model: string;
+  binance_api_key_override?: string | null;
+  binance_secret_override?: string | null;
+  deepseek_key_override?: string | null;
+  telegram_token_override?: string | null;
+  telegram_chat_id_override?: string | null;
+  panic_close_all: boolean;
+  updated_at: string;
+}
+
+interface AccountSnapshot {
+  id: number;
+  equity_usdt: number;
+  free_usdt: number;
+  daily_pnl_usdt: number;
+  daily_pnl_pct: number;
+  open_positions: any[];
+  created_at: string;
+}
+
+interface StrategyPerformance {
+  strategy_name: string;
+  closed_trades: number;
+  open_trades: number;
+  wins: number;
+  losses: number;
+  win_rate_pct: number;
+  net_pnl_usdt: number;
+  avg_r_multiple: number;
+  profit_factor: number;
+}
+
+interface TradeExecution {
+  id: number;
+  exchange_order_id: string;
+  sl_order_id: string;
+  tp_order_id: string;
+  symbol: string;
+  strategy_name: string;
+  side: "LONG" | "SHORT";
+  initial_qty: number;
+  qty: number;
+  entry_price: number;
+  exit_price?: number | null;
+  stop_loss: number;
+  take_profit: number;
+  breakeven_activated: boolean;
+  status: "OPEN" | "CLOSED_TP" | "CLOSED_SL" | "TIME_STOP" | "MANUAL_CLOSE";
+  pnl_usdt?: number | null;
+  pnl_r?: number | null;
+  mfe_r: number;
+  mae_r: number;
+  entry_rvol: number;
+  entry_scores?: any;
+  opened_at: string;
+  closed_at?: string | null;
+}
+
+interface AiAuditLog {
+  id: number;
+  symbol: string;
+  strategy_name: string;
+  proposed_direction: string;
+  total_score: number;
+  veto_triggered: boolean;
+  veto_reason?: string | null;
+  rubric_breakdown: any;
+  market_snapshot: any;
+  news_context: any;
+  created_at: string;
+}
+
+interface BotLesson {
+  id: number;
+  symbol: string;
+  strategy_name: string;
+  weakness_detected: string;
+  prompt_guardrail_rule: string;
+  suggested_param_key: string;
+  suggested_param_value: any;
+  win_rate_impact: string;
+  status: "PENDING" | "ACTIVE" | "DISMISSED";
+  created_at: string;
+}
+
+interface TradeAutopsy {
+  id: number;
+  trade_id: number;
+  symbol: string;
+  strategy_name: string;
+  outcome: string;
+  failure_category: string;
+  root_cause_analysis: string;
+  recommended_rule_adjustment: string;
+  created_at: string;
+}
+
+const ALL_STRATEGIES = [
+  "SMC_Liquidity_Sweep",
+  "EMA_Trend_Pullback",
+  "BB_Volatility_Breakout",
+  "RSI_Divergence_Reversal",
+];
+
+export default function CommandCenterPage() {
+  const router = useRouter();
+
+  // Authentication State
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  // Core Data States
+  const [config, setConfig] = useState<BotConfig | null>(null);
+  const [latestSnapshot, setLatestSnapshot] = useState<AccountSnapshot | null>(null);
+  const [perfView, setPerfView] = useState<StrategyPerformance[]>([]);
+  const [openTrades, setOpenTrades] = useState<TradeExecution[]>([]);
+  const [recentAudits, setRecentAudits] = useState<AiAuditLog[]>([]);
+  const [lessons, setLessons] = useState<BotLesson[]>([]);
+  const [autopsies, setAutopsies] = useState<TradeAutopsy[]>([]);
+
+  // UI States
+  const [activeTab, setActiveTab] = useState<"leaderboard" | "positions" | "autopsies" | "settings">("leaderboard");
+  const [showPanicModal, setShowPanicModal] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [statusNotification, setStatusNotification] = useState<string | null>(null);
+
+  // Settings Form State
+  const [formSettings, setFormSettings] = useState<Partial<BotConfig>>({});
+  const [showSecretKeys, setShowSecretKeys] = useState<{ [key: string]: boolean }>({});
+
+  // 1. Check Authentication
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        // Redirect to login if unauthenticated
+        router.push("/login");
+      } else {
+        setUserEmail(session.user?.email || "Operator");
+        setSessionChecked(true);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.push("/login");
+      } else {
+        setUserEmail(session.user?.email || "Operator");
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router]);
+
+  // 2. Initial Data Loading & Realtime Subscriptions
+  const fetchAllData = async () => {
+    try {
+      // Fetch Config
+      const { data: cfgData } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfgData) {
+        setConfig(cfgData);
+        setFormSettings(cfgData);
+      }
+
+      // Fetch Latest Account Snapshot
+      const { data: snapData } = await supabase
+        .from("account_snapshots")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (snapData) setLatestSnapshot(snapData);
+
+      // Fetch Strategy Performance View
+      const { data: perfData } = await supabase.from("strategy_performance_view").select("*");
+      if (perfData) setPerfView(perfData);
+
+      // Fetch Open Trades
+      const { data: tradeData } = await supabase
+        .from("trade_executions")
+        .select("*")
+        .eq("status", "OPEN")
+        .order("opened_at", { ascending: false });
+      if (tradeData) setOpenTrades(tradeData);
+
+      // Fetch Recent AI Audits
+      const { data: auditData } = await supabase
+        .from("ai_audit_logs")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(15);
+      if (auditData) setRecentAudits(auditData);
+
+      // Fetch Lessons
+      const { data: lessonData } = await supabase
+        .from("bot_lessons")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (lessonData) setLessons(lessonData);
+
+      // Fetch Autopsies
+      const { data: autopsyData } = await supabase
+        .from("trade_autopsies")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (autopsyData) setAutopsies(autopsyData);
+    } catch (err) {
+      console.error("Data fetch error:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllData();
+
+    // Setup Supabase Realtime Channels
+    const channel = supabase
+      .channel("command-center-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "bot_config" }, (payload) => {
+        if (payload.new) {
+          setConfig(payload.new as BotConfig);
+          setFormSettings(payload.new as BotConfig);
+        }
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "account_snapshots" }, (payload) => {
+        if (payload.new) setLatestSnapshot(payload.new as AccountSnapshot);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "trade_executions" }, () => {
+        fetchAllData();
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "ai_audit_logs" }, (payload) => {
+        if (payload.new) setRecentAudits((prev) => [payload.new as AiAuditLog, ...prev.slice(0, 14)]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "bot_lessons" }, () => {
+        supabase
+          .from("bot_lessons")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(20)
+          .then(({ data }) => data && setLessons(data));
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Flash notification helper
+  const showToast = (msg: string) => {
+    setStatusNotification(msg);
+    setTimeout(() => setStatusNotification(null), 3500);
+  };
+
+  // 3. Quick Action Handlers
+  const toggleBotActive = async () => {
+    if (!config) return;
+    const newState = !config.is_active;
+    setConfig({ ...config, is_active: newState });
+    const { error } = await supabase.from("bot_config").update({ is_active: newState }).eq("id", 1);
+    if (!error) {
+      showToast(`Trading Engine ${newState ? "ACTIVATED" : "PAUSED"}`);
+    }
+  };
+
+  const toggleSandboxMode = async () => {
+    if (!config) return;
+    const newSandbox = !config.sandbox_mode;
+    setConfig({ ...config, sandbox_mode: newSandbox });
+    const { error } = await supabase.from("bot_config").update({ sandbox_mode: newSandbox }).eq("id", 1);
+    if (!error) {
+      showToast(`Switched execution mode to ${newSandbox ? "TESTNET / SANDBOX" : "BINANCE LIVE FUTURES"}`);
+    }
+  };
+
+  const triggerPanicCloseAll = async () => {
+    setShowPanicModal(false);
+    const { error } = await supabase.from("bot_config").update({ panic_close_all: true, is_active: false }).eq("id", 1);
+    if (!error) {
+      showToast("EMERGENCY FLATTEN DISPATCHED: Closing all positions and cancelling orders!");
+    }
+  };
+
+  const toggleStrategyActive = async (stratName: string) => {
+    if (!config) return;
+    const current = config.active_strategies || [];
+    const updated = current.includes(stratName)
+      ? current.filter((s) => s !== stratName)
+      : [...current, stratName];
+
+    setConfig({ ...config, active_strategies: updated });
+    await supabase.from("bot_config").update({ active_strategies: updated }).eq("id", 1);
+    showToast(`Strategy '${stratName}' ${updated.includes(stratName) ? "Enabled" : "Paused"}`);
+  };
+
+  const handleLessonAction = async (lessonId: number, status: "ACTIVE" | "DISMISSED") => {
+    const { error } = await supabase.from("bot_lessons").update({ status }).eq("id", lessonId);
+    if (!error) {
+      setLessons((prev) => prev.map((l) => (l.id === lessonId ? { ...l, status } : l)));
+      showToast(`Lesson #${lessonId} marked as ${status}`);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingConfig(true);
+    try {
+      const updates = {
+        risk_pct: Number(formSettings.risk_pct),
+        min_score: Number(formSettings.min_score),
+        min_rvol: Number(formSettings.min_rvol),
+        max_directional_exposure_pct: Number(formSettings.max_directional_exposure_pct),
+        max_hold_bars: Number(formSettings.max_hold_bars),
+        max_funding_rate_pct: Number(formSettings.max_funding_rate_pct),
+        enable_breakeven_partial: Boolean(formSettings.enable_breakeven_partial),
+        use_limit_maker_entry: Boolean(formSettings.use_limit_maker_entry),
+        telegram_notifications: Boolean(formSettings.telegram_notifications),
+        auto_apply_lessons: Boolean(formSettings.auto_apply_lessons),
+        deepseek_model: formSettings.deepseek_model || "deepseek-chat",
+        symbols: formSettings.symbols || ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+        binance_api_key_override: formSettings.binance_api_key_override || null,
+        binance_secret_override: formSettings.binance_secret_override || null,
+        deepseek_key_override: formSettings.deepseek_key_override || null,
+        telegram_token_override: formSettings.telegram_token_override || null,
+        telegram_chat_id_override: formSettings.telegram_chat_id_override || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("bot_config").update(updates).eq("id", 1);
+      if (!error) {
+        showToast("Quantitative configuration updated successfully!");
+        if (config) setConfig({ ...config, ...updates });
+      } else {
+        showToast(`Save error: ${error.message}`);
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
+  // Calculations
+  const calculatedExposure = useMemo(() => {
+    const unhedged = openTrades.filter((t) => !t.breakeven_activated);
+    const exposurePct = unhedged.length * (config?.risk_pct || 0.01) * 100;
+    const maxPct = (config?.max_directional_exposure_pct || 0.015) * 100;
+    return { current: exposurePct.toFixed(2), max: maxPct.toFixed(1) };
+  }, [openTrades, config]);
+
+  const overallStats = useMemo(() => {
+    let totalClosed = 0;
+    let totalWins = 0;
+    perfView.forEach((p) => {
+      totalClosed += Number(p.closed_trades || 0);
+      totalWins += Number(p.wins || 0);
+    });
+    const winRate = totalClosed > 0 ? ((totalWins / totalClosed) * 100).toFixed(1) : "0.0";
+    return { totalClosed, totalWins, winRate };
+  }, [perfView]);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* Toast Notification */}
+      {statusNotification && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-slate-900/95 px-4 py-3 text-sm font-medium text-cyan-300 shadow-2xl backdrop-blur-md animate-bounce">
+          <Zap className="h-4 w-4 text-cyan-400" />
+          <span>{statusNotification}</span>
+        </div>
+      )}
+
+      {/* EMERGENCY PANIC MODAL */}
+      {showPanicModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-2xl border border-rose-600/40 bg-slate-950 p-6 shadow-2xl">
+            <div className="flex items-center gap-3 text-rose-500 mb-4">
+              <AlertTriangle className="h-8 w-8 animate-pulse" />
+              <h3 className="text-xl font-bold">EMERGENCY FLATTEN CONFIRMATION</h3>
+            </div>
+            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+              This action will <strong>IMMEDIATELY CANCEL ALL OPEN ORDERS</strong> on Binance and execute
+              <strong> MARKET CLOSE</strong> on every active futures position, setting the bot state to <strong>PAUSED</strong>.
+              Are you absolutely certain?
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowPanicModal(false)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800 transition-colors"
+              >
+                Cancel / Stand Down
+              </button>
+              <button
+                onClick={triggerPanicCloseAll}
+                className="rounded-xl bg-rose-600 px-5 py-2 text-sm font-bold text-white shadow-lg shadow-rose-600/30 hover:bg-rose-500 transition-all cursor-pointer"
+              >
+                CONFIRM FLATTEN ALL
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HEADER BAR */}
+      <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+        {/* Branding & Author */}
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-cyan-600 to-emerald-500 shadow-md shadow-cyan-500/20">
+            <Cpu className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold tracking-tight text-white">alifcrptoai</span>
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 uppercase">
+                v1.0 Pro
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Developed by <span className="font-semibold text-slate-200">Alifu Haji</span> | Contabo 6vCPU / 12GB
+            </p>
+          </div>
+        </div>
+
+        {/* Live Controls & Badges */}
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3.5">
+          {/* Active/Paused Switch */}
+          <button
+            onClick={toggleBotActive}
+            className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all border ${
+              config?.is_active
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 shadow-sm shadow-emerald-500/20"
+                : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+            }`}
+          >
+            {config?.is_active ? <Play className="h-3.5 w-3.5 fill-current" /> : <Pause className="h-3.5 w-3.5 fill-current" />}
+            <span>ENGINE: {config?.is_active ? "RUNNING" : "PAUSED"}</span>
+          </button>
+
+          {/* Testnet vs Live Switch */}
+          <button
+            onClick={toggleSandboxMode}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-bold transition-all border ${
+              config?.sandbox_mode
+                ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
+                : "border-rose-500/40 bg-rose-500/15 text-rose-300"
+            }`}
+          >
+            <Shield className="h-3.5 w-3.5" />
+            <span>{config?.sandbox_mode ? "TESTNET / SANDBOX" : "LIVE BINANCE USDM"}</span>
+          </button>
+
+          {/* Macro Shield Status */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-300">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+            <span className="hidden sm:inline text-slate-400">Macro Shield:</span>
+            <span className="text-emerald-400">NORMAL</span>
+          </div>
+
+          {/* Correlated Exposure Meter */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-xs font-semibold text-slate-300">
+            <Layers className="h-3.5 w-3.5 text-cyan-400" />
+            <span className="hidden sm:inline text-slate-400">Net Risk:</span>
+            <span className="font-mono text-cyan-300">
+              {calculatedExposure.current}% / {calculatedExposure.max}%
+            </span>
+          </div>
+
+          {/* EMERGENCY PANIC BUTTON */}
+          <button
+            onClick={() => setShowPanicModal(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-rose-600/50 bg-rose-600/20 px-3.5 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-600 hover:text-white transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+            <span>PANIC CLOSE ALL</span>
+          </button>
+
+          {/* Sign Out */}
+          <button
+            onClick={() => supabase.auth.signOut()}
+            title="Sign Out"
+            className="rounded-xl border border-slate-800 bg-slate-900 p-2 text-slate-400 hover:text-slate-100 transition-colors"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </header>
+
+      {/* TOP 4 TELEMETRY CARDS */}
+      <section className="px-4 lg:px-8 pt-6 pb-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Total USDT Equity */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg backdrop-blur-sm">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              <span>Total USDT Equity</span>
+              <DollarSign className="h-4 w-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono text-white tracking-tight">
+              ${Number(latestSnapshot?.equity_usdt || 10000.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="mt-2 flex items-center text-xs font-medium text-emerald-400">
+              <TrendingUp className="h-3.5 w-3.5 mr-1" />
+              <span>Institutional Portfolio Mark</span>
+            </div>
+          </div>
+
+          {/* Card 2: Free Margin */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg backdrop-blur-sm">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              <span>Available Free Margin</span>
+              <Activity className="h-4 w-4 text-cyan-400" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono text-cyan-300 tracking-tight">
+              ${Number(latestSnapshot?.free_usdt || 10000.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="mt-2.5 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-cyan-400 rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    ((Number(latestSnapshot?.free_usdt || 10000) / Number(latestSnapshot?.equity_usdt || 10000)) * 100)
+                  )}%`,
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Card 3: Intraday P&L */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg backdrop-blur-sm">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              <span>Today's Realized P&L</span>
+              {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? (
+                <ArrowUpRight className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <ArrowDownRight className="h-4 w-4 text-rose-400" />
+              )}
+            </div>
+            <div
+              className={`text-2xl font-extrabold font-mono tracking-tight ${
+                (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
+              }`}
+            >
+              {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "+" : ""}
+              ${Number(latestSnapshot?.daily_pnl_usdt || 0).toFixed(2)}
+              <span className="text-sm font-semibold ml-1.5 text-slate-400">
+                ({(latestSnapshot?.daily_pnl_pct || 0) >= 0 ? "+" : ""}
+                {Number(latestSnapshot?.daily_pnl_pct || 0).toFixed(2)}%)
+              </span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">Closed positions since 00:00 UTC</div>
+          </div>
+
+          {/* Card 4: Overall Win Rate / Active Positions */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg backdrop-blur-sm">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              <span>Win Rate / Active</span>
+              <Flame className="h-4 w-4 text-amber-400" />
+            </div>
+            <div className="text-2xl font-extrabold font-mono text-white tracking-tight flex items-center justify-between">
+              <span>{overallStats.winRate}%</span>
+              <span className="text-sm font-semibold rounded-lg bg-cyan-500/10 border border-cyan-500/30 px-2 py-0.5 text-cyan-300">
+                {openTrades.length} Active
+              </span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              {overallStats.totalWins} Wins / {overallStats.totalClosed - overallStats.totalWins} Losses across all strategies
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* TABS NAVIGATION */}
+      <section className="px-4 lg:px-8 pt-4">
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab("leaderboard")}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+              activeTab === "leaderboard"
+                ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <TrendingUp className="h-4 w-4" />
+            <span>Tab 1: Strategy Performance</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("positions")}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+              activeTab === "positions"
+                ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            <span>Tab 2: Live Positions & AI Audits</span>
+            {openTrades.length > 0 && (
+              <span className="rounded-full bg-cyan-500 px-1.5 py-0.2 text-[10px] font-extrabold text-slate-950">
+                {openTrades.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab("autopsies")}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+              activeTab === "autopsies"
+                ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Brain className="h-4 w-4" />
+            <span>Tab 3: AI Self-Improvement & Autopsies</span>
+            {lessons.filter((l) => l.status === "PENDING").length > 0 && (
+              <span className="rounded-full bg-amber-500 px-1.5 py-0.2 text-[10px] font-extrabold text-slate-950 animate-pulse">
+                {lessons.filter((l) => l.status === "PENDING").length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab("settings")}
+            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+              activeTab === "settings"
+                ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
+            }`}
+          >
+            <Sliders className="h-4 w-4" />
+            <span>Tab 4: Risk & API Settings</span>
+          </button>
+        </div>
+      </section>
+
+      {/* TAB CONTENT PANELS */}
+      <main className="flex-1 px-4 lg:px-8 py-6">
+        {/* ========================================================================= */}
+        {/* TAB 1: STRATEGY PERFORMANCE LEADERBOARD */}
+        {/* ========================================================================= */}
+        {activeTab === "leaderboard" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-white">Strategy Performance Leaderboard</h2>
+                <p className="text-xs text-slate-400">
+                  Aggregated in real-time from PostgreSQL view <code>strategy_performance_view</code>
+                </p>
+              </div>
+              <button
+                onClick={fetchAllData}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Refresh View</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
+                  <tr>
+                    <th className="py-3.5 px-4">Strategy Plugin</th>
+                    <th className="py-3.5 px-4 text-center">Status</th>
+                    <th className="py-3.5 px-4 text-center">Closed (W / L)</th>
+                    <th className="py-3.5 px-4 text-center">Win Rate</th>
+                    <th className="py-3.5 px-4 text-center">Profit Factor</th>
+                    <th className="py-3.5 px-4 text-center">Avg R-Multiple</th>
+                    <th className="py-3.5 px-4 text-right">Net P&L (USDT)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {ALL_STRATEGIES.map((stratName) => {
+                    const row = perfView.find((p) => p.strategy_name === stratName) || {
+                      strategy_name: stratName,
+                      closed_trades: 0,
+                      open_trades: 0,
+                      wins: 0,
+                      losses: 0,
+                      win_rate_pct: 0,
+                      net_pnl_usdt: 0,
+                      avg_r_multiple: 0,
+                      profit_factor: 0,
+                    };
+
+                    const isEnabled = config?.active_strategies?.includes(stratName);
+                    const pf = Number(row.profit_factor || 0);
+
+                    // Profit Factor color coding
+                    let pfBadgeColor = "text-slate-400 bg-slate-800/40 border-slate-700";
+                    if (pf >= 1.5) pfBadgeColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/30";
+                    else if (pf >= 1.0) pfBadgeColor = "text-amber-400 bg-amber-500/10 border-amber-500/30";
+                    else if (row.closed_trades > 0) pfBadgeColor = "text-rose-400 bg-rose-500/10 border-rose-500/30";
+
+                    return (
+                      <tr key={stratName} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="py-3.5 px-4 font-sans font-semibold text-slate-100 flex items-center gap-2">
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              isEnabled ? "bg-emerald-400 animate-pulse" : "bg-slate-600"
+                            }`}
+                          />
+                          <span>{stratName}</span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <button
+                            onClick={() => toggleStrategyActive(stratName)}
+                            className={`rounded-lg px-2.5 py-1 text-[11px] font-sans font-bold border transition-all ${
+                              isEnabled
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                                : "border-slate-700 bg-slate-800 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            {isEnabled ? "ACTIVE" : "PAUSED"}
+                          </button>
+                        </td>
+                        <td className="py-3.5 px-4 text-center text-slate-300">
+                          {row.closed_trades} ({row.wins}W / {row.losses}L)
+                        </td>
+                        <td className="py-3.5 px-4 text-center font-bold text-slate-200">
+                          {Number(row.win_rate_pct || 0).toFixed(1)}%
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span className={`rounded-md border px-2 py-0.5 font-bold ${pfBadgeColor}`}>
+                            {pf.toFixed(2)}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center text-slate-200">
+                          {Number(row.avg_r_multiple || 0).toFixed(2)}R
+                        </td>
+                        <td
+                          className={`py-3.5 px-4 text-right font-bold ${
+                            Number(row.net_pnl_usdt || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
+                          }`}
+                        >
+                          {Number(row.net_pnl_usdt || 0) >= 0 ? "+" : ""}
+                          ${Number(row.net_pnl_usdt || 0).toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 2: LIVE POSITIONS, NEWS FEED & AI RUBRIC STREAM */}
+        {/* ========================================================================= */}
+        {activeTab === "positions" && (
+          <div className="space-y-8">
+            {/* 1. Open Positions Section */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-cyan-400" />
+                    <span>Active Institutional Positions ({openTrades.length})</span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Server-side protected positions on Binance Futures with trailing telemetry
+                  </p>
+                </div>
+              </div>
+
+              {openTrades.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800/80 bg-slate-900/30 p-8 text-center text-slate-500 text-xs">
+                  Zero active positions. Scanner is evaluating incoming 15m candles against active strategies.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider font-sans">
+                      <tr>
+                        <th className="py-3 px-4">Symbol / Strategy</th>
+                        <th className="py-3 px-4 text-center">Direction</th>
+                        <th className="py-3 px-4 text-right">Entry</th>
+                        <th className="py-3 px-4 text-right">Stop Loss</th>
+                        <th className="py-3 px-4 text-right">Take Profit</th>
+                        <th className="py-3 px-4 text-center">R-Multiple / MFE</th>
+                        <th className="py-3 px-4 text-center">Break-Even Status</th>
+                        <th className="py-3 px-4 text-center">Hold Duration</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {openTrades.map((t) => {
+                        return (
+                          <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-3 px-4">
+                              <div className="font-sans font-bold text-slate-100">{t.symbol}</div>
+                              <div className="text-[10px] text-cyan-400 font-sans">{t.strategy_name}</div>
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <span
+                                className={`rounded-md px-2 py-0.5 text-[10px] font-sans font-extrabold ${
+                                  t.side === "LONG"
+                                    ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-400"
+                                    : "bg-rose-500/15 border border-rose-500/40 text-rose-400"
+                                }`}
+                              >
+                                {t.side}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right text-slate-200">${Number(t.entry_price).toFixed(4)}</td>
+                            <td className="py-3 px-4 text-right text-rose-400">${Number(t.stop_loss).toFixed(4)}</td>
+                            <td className="py-3 px-4 text-right text-emerald-400">${Number(t.take_profit).toFixed(4)}</td>
+                            <td className="py-3 px-4 text-center">
+                              <div className="font-bold text-slate-100">MFE: +{Number(t.mfe_r || 0).toFixed(2)}R</div>
+                              <div className="text-[10px] text-slate-400">MAE: {Number(t.mae_r || 0).toFixed(2)}R</div>
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              {t.breakeven_activated ? (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans font-bold text-emerald-300">
+                                  <ShieldCheck className="h-3 w-3" />
+                                  RISK-FREE (+1R BE LOCKED)
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 text-[10px] font-sans">Open Risk Active</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-center font-sans text-[11px] text-slate-300">
+                              <div className="flex items-center justify-center gap-1">
+                                <Clock className="h-3 w-3 text-slate-500" />
+                                <span>Max {config?.max_hold_bars || 20} Bars</span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* 2. Live Stream of AI Audit Logs */}
+            <div>
+              <div className="mb-3">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-cyan-400" />
+                  <span>DeepSeek AI Discrete Rubric Stream</span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Real-time audit chain-of-thought, flaw deductions, and binary kill-switch evaluations
+                </p>
+              </div>
+
+              {recentAudits.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800/80 bg-slate-900/30 p-8 text-center text-slate-500 text-xs">
+                  Awaiting candidate strategy signals to initiate Chief Quantitative Risk Officer audits.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {recentAudits.map((audit) => {
+                    const isVetoed = audit.veto_triggered || audit.total_score < (config?.min_score || 75);
+                    const breakdown = audit.rubric_breakdown || {};
+
+                    return (
+                      <div
+                        key={audit.id}
+                        className={`rounded-2xl border p-4 transition-all ${
+                          isVetoed
+                            ? "border-rose-900/40 bg-slate-900/40"
+                            : "border-emerald-900/40 bg-slate-900/60 shadow-lg"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-xs font-bold ${
+                                audit.proposed_direction === "LONG"
+                                  ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                                  : "bg-rose-500/15 border border-rose-500/30 text-rose-400"
+                              }`}
+                            >
+                              {audit.proposed_direction}
+                            </span>
+                            <span className="font-bold text-sm text-white">{audit.symbol}</span>
+                            <span className="text-xs text-slate-400">({audit.strategy_name})</span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {isVetoed ? (
+                              <span className="flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/10 px-2.5 py-0.5 text-xs font-bold text-rose-300">
+                                <XCircle className="h-3.5 w-3.5" />
+                                VETOED / REJECTED
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-bold text-emerald-300">
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                APPROVED ({audit.total_score}/100)
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-500">
+                              {new Date(audit.created_at).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Veto Reason if Triggered */}
+                        {audit.veto_reason && (
+                          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+                            <strong>Kill-Switch Veto:</strong> {audit.veto_reason}
+                          </div>
+                        )}
+
+                        {/* 5 Discrete Sub-Scores Breakdown */}
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase">HTF Regime</div>
+                            <div className="font-mono font-bold text-cyan-300 text-sm mt-0.5">
+                              {breakdown.htf_regime?.score ?? 0} / 25
+                            </div>
+                            <div className="text-[9px] text-slate-500 truncate mt-0.5">
+                              {breakdown.htf_regime?.flaw_or_deduction || "Structure aligned"}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase">LTF Location</div>
+                            <div className="font-mono font-bold text-cyan-300 text-sm mt-0.5">
+                              {breakdown.ltf_location?.score ?? 0} / 25
+                            </div>
+                            <div className="text-[9px] text-slate-500 truncate mt-0.5">
+                              {breakdown.ltf_location?.flaw_or_deduction || "Sweep verified"}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase">Momentum & Vol</div>
+                            <div className="font-mono font-bold text-cyan-300 text-sm mt-0.5">
+                              {breakdown.momentum_volume?.score ?? 0} / 15
+                            </div>
+                            <div className="text-[9px] text-slate-500 truncate mt-0.5">
+                              {breakdown.momentum_volume?.flaw_or_deduction || "RVOL clean"}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase">News Catalyst</div>
+                            <div className="font-mono font-bold text-cyan-300 text-sm mt-0.5">
+                              {breakdown.news_catalyst?.score ?? 0} / 20
+                            </div>
+                            <div className="text-[9px] text-slate-500 truncate mt-0.5">
+                              {breakdown.news_catalyst?.flaw_or_deduction || "No macro storm"}
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center">
+                            <div className="text-[10px] text-slate-400 uppercase">Intermarket Tide</div>
+                            <div className="font-mono font-bold text-cyan-300 text-sm mt-0.5">
+                              {breakdown.intermarket_tide?.score ?? 0} / 15
+                            </div>
+                            <div className="text-[9px] text-slate-500 truncate mt-0.5">
+                              {breakdown.intermarket_tide?.flaw_or_deduction || "BTC aligned"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* News Headlines Evaluated */}
+                        {Array.isArray(audit.news_context) && audit.news_context.length > 0 && (
+                          <div className="mt-3 border-t border-slate-800/60 pt-2 text-[11px] text-slate-400">
+                            <span className="font-semibold text-slate-300">Live CryptoCompare Headlines: </span>
+                            {audit.news_context.map((n: any, idx: number) => (
+                              <span key={idx} className="mr-3">
+                                • {n.title} ({n.published_mins_ago}m ago)
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 3: AI SELF-IMPROVEMENT & POST-MORTEM AUTOPSIES */}
+        {/* ========================================================================= */}
+        {activeTab === "autopsies" && (
+          <div className="space-y-8">
+            {/* Auto-Apply Lessons Toggle Header */}
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Brain className="h-5 w-5 text-amber-400" />
+                  <span>Autonomous Self-Optimization Engine</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  When enabled, DeepSeek forensic autopsy lessons automatically quarantine underperforming strategies
+                  (Profit Factor &lt; 0.80) and inject verified guardrails into prompt caches.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-semibold text-slate-300">
+                  {config?.auto_apply_lessons ? "AUTO-APPLY MODE" : "MANUAL APPROVAL MODE"}
+                </span>
+                <button
+                  onClick={async () => {
+                    if (!config) return;
+                    const val = !config.auto_apply_lessons;
+                    setConfig({ ...config, auto_apply_lessons: val });
+                    await supabase.from("bot_config").update({ auto_apply_lessons: val }).eq("id", 1);
+                    showToast(`Self-Optimization mode: ${val ? "AUTO-APPLY" : "MANUAL APPROVAL"}`);
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    config?.auto_apply_lessons ? "bg-emerald-500" : "bg-slate-700"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      config?.auto_apply_lessons ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Discovered Weaknesses & Lessons Queue */}
+            <div>
+              <h4 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-3">
+                Discovered Guardrail Rules & Weaknesses Queue ({lessons.length})
+              </h4>
+
+              {lessons.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800/80 bg-slate-900/30 p-8 text-center text-slate-500 text-xs">
+                  Zero active weaknesses detected. The forensic analyst has observed clean historical execution.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {lessons.map((lesson) => {
+                    return (
+                      <div
+                        key={lesson.id}
+                        className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-md flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between border-b border-slate-800/80 pb-2 mb-3">
+                            <span className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-bold text-cyan-300 font-mono">
+                              {lesson.strategy_name} ({lesson.symbol})
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                lesson.status === "ACTIVE"
+                                  ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                                  : lesson.status === "PENDING"
+                                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-300 animate-pulse"
+                                  : "bg-slate-800 text-slate-400"
+                              }`}
+                            >
+                              {lesson.status}
+                            </span>
+                          </div>
+
+                          <div className="text-xs font-bold text-white mb-1">
+                            Weakness: <span className="text-rose-400">{lesson.weakness_detected}</span>
+                          </div>
+                          <div className="text-xs text-slate-300 mb-2 leading-relaxed">
+                            <strong>Prompt Guardrail Rule:</strong> <em>"{lesson.prompt_guardrail_rule}"</em>
+                          </div>
+                          <div className="text-[11px] text-cyan-400 font-mono mb-3">
+                            Suggested Param: {lesson.suggested_param_key} = {JSON.stringify(lesson.suggested_param_value)} (
+                            {lesson.win_rate_impact})
+                          </div>
+                        </div>
+
+                        {lesson.status === "PENDING" && (
+                          <div className="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                            <button
+                              onClick={() => handleLessonAction(lesson.id, "ACTIVE")}
+                              className="flex-1 rounded-xl bg-emerald-600/20 border border-emerald-500/40 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer"
+                            >
+                              Approve & Inject Rule
+                            </button>
+                            <button
+                              onClick={() => handleLessonAction(lesson.id, "DISMISSED")}
+                              className="rounded-xl border border-slate-700 bg-slate-800 py-1.5 px-3 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Losing Trade Forensic Autopsies Feed */}
+            <div>
+              <h4 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-3">
+                Post-Mortem Autopsies (Losing Trades)
+              </h4>
+
+              {autopsies.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800/80 bg-slate-900/30 p-8 text-center text-slate-500 text-xs">
+                  No post-mortem autopsies recorded yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {autopsies.map((a) => (
+                    <div
+                      key={a.id}
+                      className="rounded-2xl border border-rose-950/40 bg-slate-900/40 p-4 shadow-md text-xs leading-relaxed"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2 mb-2">
+                        <div className="flex items-center gap-2 font-bold text-slate-200">
+                          <span>Trade #{a.trade_id}</span>
+                          <span className="font-mono text-cyan-400">{a.symbol}</span>
+                          <span className="text-slate-400">({a.strategy_name})</span>
+                        </div>
+                        <span className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold text-rose-300">
+                          {a.failure_category}
+                        </span>
+                      </div>
+                      <p className="text-slate-300 mb-1.5">
+                        <strong>Root Cause Analysis:</strong> {a.root_cause_analysis}
+                      </p>
+                      <p className="text-cyan-400">
+                        <strong>Recommended Adjustment:</strong> {a.recommended_rule_adjustment}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 4: RISK, EXECUTION & API SETTINGS CONTROL */}
+        {/* ========================================================================= */}
+        {activeTab === "settings" && (
+          <form onSubmit={handleSaveSettings} className="space-y-8 max-w-4xl">
+            <div>
+              <h2 className="text-lg font-bold text-white">Risk, Execution & API Settings Control</h2>
+              <p className="text-xs text-slate-400">
+                Institutional risk controls synced directly with Contabo VPS Python worker via <code>bot_config</code>
+              </p>
+            </div>
+
+            {/* Numerical Risk Parameters */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-6">
+              <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                <span>Quantitative Risk Guardrails</span>
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Risk Per Trade ({(Number(formSettings.risk_pct || 0.01) * 100).toFixed(2)}%)
+                  </label>
+                  <input
+                    type="range"
+                    min="0.0025"
+                    max="0.02"
+                    step="0.0025"
+                    value={formSettings.risk_pct || 0.01}
+                    onChange={(e) => setFormSettings({ ...formSettings, risk_pct: parseFloat(e.target.value) })}
+                    className="w-full accent-cyan-500"
+                  />
+                  <span className="text-[11px] text-slate-500">Range: 0.25% to 2.0%</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Min AI Audit Score ({formSettings.min_score || 75})
+                  </label>
+                  <input
+                    type="range"
+                    min="70"
+                    max="95"
+                    step="1"
+                    value={formSettings.min_score || 75}
+                    onChange={(e) => setFormSettings({ ...formSettings, min_score: parseInt(e.target.value) })}
+                    className="w-full accent-cyan-500"
+                  />
+                  <span className="text-[11px] text-slate-500">Range: 70 to 95 Points</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Min Relative Volume RVOL ({formSettings.min_rvol || 1.2}x)
+                  </label>
+                  <input
+                    type="range"
+                    min="0.8"
+                    max="2.5"
+                    step="0.1"
+                    value={formSettings.min_rvol || 1.2}
+                    onChange={(e) => setFormSettings({ ...formSettings, min_rvol: parseFloat(e.target.value) })}
+                    className="w-full accent-cyan-500"
+                  />
+                  <span className="text-[11px] text-slate-500">Range: 0.8x to 2.5x</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-slate-800">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Max Directional Exposure Pct
+                  </label>
+                  <input
+                    type="number"
+                    step="0.005"
+                    value={formSettings.max_directional_exposure_pct || 0.015}
+                    onChange={(e) =>
+                      setFormSettings({ ...formSettings, max_directional_exposure_pct: parseFloat(e.target.value) })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 text-xs text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-slate-500">Default: 0.015 (1.5%)</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Max Hold Bars (Zombie Time-Stop)
+                  </label>
+                  <input
+                    type="number"
+                    value={formSettings.max_hold_bars || 20}
+                    onChange={(e) => setFormSettings({ ...formSettings, max_hold_bars: parseInt(e.target.value) })}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 text-xs text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-slate-500">15m bars before exit if &lt;0.5R</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Max Funding Rate Pct
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formSettings.max_funding_rate_pct || 0.05}
+                    onChange={(e) =>
+                      setFormSettings({ ...formSettings, max_funding_rate_pct: parseFloat(e.target.value) })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 text-xs text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
+                  />
+                  <span className="text-[11px] text-slate-500">Filter crowded positioning</span>
+                </div>
+              </div>
+
+              {/* Toggles */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-slate-800">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formSettings.enable_breakeven_partial ?? true}
+                    onChange={(e) => setFormSettings({ ...formSettings, enable_breakeven_partial: e.target.checked })}
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-500 focus:ring-0"
+                  />
+                  <span className="text-xs text-slate-200">+1.0R Partial &amp; BE</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formSettings.use_limit_maker_entry ?? true}
+                    onChange={(e) => setFormSettings({ ...formSettings, use_limit_maker_entry: e.target.checked })}
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-500 focus:ring-0"
+                  />
+                  <span className="text-xs text-slate-200">Limit Maker (GTX)</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formSettings.telegram_notifications ?? true}
+                    onChange={(e) => setFormSettings({ ...formSettings, telegram_notifications: e.target.checked })}
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-500 focus:ring-0"
+                  />
+                  <span className="text-xs text-slate-200">Telegram Push Alerts</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Watchlist Symbols */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-4">
+              <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider">
+                Watchlist Symbols (USDT-M Futures)
+              </h3>
+              <input
+                type="text"
+                value={(formSettings.symbols || []).join(", ")}
+                onChange={(e) =>
+                  setFormSettings({
+                    ...formSettings,
+                    symbols: e.target.value.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
+                  })
+                }
+                placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2.5 px-4 text-xs text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
+              />
+              <span className="text-[11px] text-slate-500">Comma-separated ccxt pair identifiers.</span>
+            </div>
+
+            {/* API Key Overrides */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl space-y-5">
+              <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+                <Lock className="h-4 w-4" />
+                <span>Encrypted API Key Overrides</span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Leave empty to fallback to container environment variables. Values entered here take precedence immediately.
+              </p>
+
+              {[
+                { key: "binance_api_key_override", label: "Binance Futures API Key Override" },
+                { key: "binance_secret_override", label: "Binance Futures Secret Override" },
+                { key: "deepseek_key_override", label: "DeepSeek AI Key Override" },
+                { key: "telegram_token_override", label: "Telegram Bot Token Override" },
+                { key: "telegram_chat_id_override", label: "Telegram Chat ID Override" },
+              ].map(({ key, label }) => {
+                const isVisible = showSecretKeys[key];
+                return (
+                  <div key={key}>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">{label}</label>
+                    <div className="relative">
+                      <input
+                        type={isVisible ? "text" : "password"}
+                        value={(formSettings as any)[key] || ""}
+                        onChange={(e) => setFormSettings({ ...formSettings, [key]: e.target.value })}
+                        placeholder="••••••••••••••••"
+                        className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 px-3 pr-10 text-xs text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSecretKeys({ ...showSecretKeys, [key]: !isVisible })}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                      >
+                        {isVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Save Button */}
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={isSavingConfig}
+                className="rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 hover:from-cyan-400 hover:to-emerald-400 focus:outline-none disabled:opacity-50 transition-all cursor-pointer"
+              >
+                {isSavingConfig ? "Saving to Supabase..." : "Save Quantitative Configuration"}
+              </button>
+            </div>
+          </form>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Lock(props: any) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
