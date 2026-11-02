@@ -23,6 +23,7 @@ env/
 .DS_Store
 Thumbs.db
 *.log
+*.tar
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

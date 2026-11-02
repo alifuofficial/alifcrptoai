@@ -11,32 +11,28 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "#020617", // slate-950
-        surface: "#090d16",
-        card: "#0f172a", // slate-900
-        border: "#1e293b", // slate-800
-        emerald: {
-          400: "#34d399",
-          500: "#10b981",
-          600: "#059669",
-        },
-        cyan: {
-          400: "#22d3ee",
-          500: "#06b6d4",
-          600: "#0891b2",
-        },
-        amber: {
-          400: "#fbbf24",
-          500: "#f59e0b",
-          600: "#d97706",
-        },
-        rose: {
-          400: "#fb7185",
-          500: "#f43f5e",
-          600: "#e11d48",
+        background: "#f8fafc", // slate-50
+        surface: "#ffffff",
+        card: "#ffffff",
+        border: "#e2e8f0", // slate-200
+        muted: "#64748b", // slate-500
+        brand: {
+          50: "#eef2ff",
+          100: "#e0e7ff",
+          500: "#6366f1",
+          600: "#4f46e5",
+          700: "#4338ca",
         },
       },
       fontFamily: {
+        sans: [
+          "Inter",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "Roboto",
+          "sans-serif",
+        ],
         mono: [
           "JetBrains Mono",
           "ui-monospace",
@@ -46,6 +42,11 @@ const config: Config = {
           "Consolas",
           "monospace",
         ],
+      },
+      boxShadow: {
+        card: "0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05)",
+        elevated: "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05)",
+        dropdown: "0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04)",
       },
     },
   },
