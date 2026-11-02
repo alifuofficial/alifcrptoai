@@ -58,7 +58,7 @@ def start_health_server(port: int = 80):
         print(f"[bot] Note: Health server port {port} unavailable ({exc}); continuing worker loop.")
 
 from strategies import evaluate_enabled_strategies, calc_indicators
-from news_macro import check_usd_macro_blackout, fetch_crypto_headlines
+from news_macro import check_usd_macro_blackout, fetch_crypto_headlines, _refresh_macro_calendar
 from notifier import (
     send_telegram_alert,
     notify_trade_opened,
@@ -689,6 +689,70 @@ def run_statistical_optimizer(supabase: Client, cfg: Dict[str, Any]) -> None:
         print(f"[optimizer] Optimization pass notice: {exc}")
 
 
+# --- MARKET & MACRO NEWS SYNCHRONIZER ---
+
+_LAST_NEWS_SYNC_TIME = 0.0
+
+def sync_market_and_macro_news(supabase: Client, symbols: List[str]) -> None:
+    """
+    Saves the latest crypto headlines and upcoming high-impact economic calendar events
+    into the Supabase `market_news` table for real-time dashboard visibility.
+    Throttled to run at most once every 5 minutes.
+    """
+    global _LAST_NEWS_SYNC_TIME
+    now = time.time()
+    if now - _LAST_NEWS_SYNC_TIME < 300:
+        return
+
+    try:
+        records: List[Dict[str, Any]] = []
+
+        # 1. Macro Calendar Events from ForexFactory
+        macro_events = _refresh_macro_calendar()
+        for ev in macro_events[:12]:
+            t = ev.get("title")
+            if not t:
+                continue
+            date_str = ev.get("date")
+            records.append({
+                "title": f"USD High-Impact: {t}",
+                "source": "ForexFactory Calendar",
+                "url": "https://www.forexfactory.com/calendar",
+                "coin": "USD",
+                "category": "macro",
+                "sentiment": "NEUTRAL",
+                "impact": "HIGH",
+                "published_at": date_str if date_str else datetime.now(timezone.utc).isoformat()
+            })
+
+        # 2. Crypto Headlines for configured symbols
+        for sym in symbols[:5]:
+            coin = sym.replace(":USDT", "").replace("/USDT", "").replace("-USDT", "").upper()
+            hl = fetch_crypto_headlines(sym)
+            for item in hl:
+                title = item.get("title", "").strip()
+                if not title:
+                    continue
+                records.append({
+                    "title": title,
+                    "source": item.get("source", "CryptoNews"),
+                    "url": item.get("url", ""),
+                    "coin": coin,
+                    "category": "crypto",
+                    "sentiment": "NEUTRAL",
+                    "impact": "MEDIUM",
+                    "published_at": datetime.now(timezone.utc).isoformat()
+                })
+
+        if records:
+            supabase.table("market_news").upsert(records, on_conflict="title").execute()
+            _LAST_NEWS_SYNC_TIME = now
+            print(f"[news_sync] Synced {len(records)} market & macro news items to database.")
+    except Exception as exc:
+        # Gracefully continue if table does not exist or temporary DB notice
+        print(f"[news_sync] Note: market_news database sync notice: {exc}")
+
+
 # --- MULTI-STRATEGY SCANNER & EXECUTION ---
 
 def scan_and_execute_signals(
@@ -994,7 +1058,10 @@ def run_master_loop():
             if iteration % 10 == 0:
                 run_statistical_optimizer(supabase, cfg)
 
-            # 6. Signal Scanner (Only if bot is ACTIVE)
+            # 6. Synchronize Market & Macro News to Database (Every ~5 mins)
+            sync_market_and_macro_news(supabase, cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"]))
+
+            # 7. Signal Scanner (Only if bot is ACTIVE)
             if cfg.get("is_active", False):
                 scan_and_execute_signals(supabase, exchange, deepseek, cfg, account_info)
             else:

@@ -170,7 +170,28 @@ CREATE INDEX IF NOT EXISTS idx_bot_lessons_status
 CREATE INDEX IF NOT EXISTS idx_bot_lessons_strat_sym 
     ON bot_lessons (strategy_name, symbol);
 
--- 7. REAL-TIME STRATEGY PERFORMANCE VIEW
+-- 7. MARKET & MACRO NEWS TABLE
+CREATE TABLE IF NOT EXISTS market_news (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    url TEXT DEFAULT NULL,
+    coin TEXT NOT NULL DEFAULT 'MARKET',
+    category TEXT NOT NULL DEFAULT 'crypto' CHECK (category IN ('crypto', 'macro')),
+    sentiment TEXT NOT NULL DEFAULT 'NEUTRAL' CHECK (sentiment IN ('BULLISH', 'BEARISH', 'NEUTRAL')),
+    impact TEXT NOT NULL DEFAULT 'MEDIUM' CHECK (impact IN ('HIGH', 'MEDIUM', 'LOW')),
+    published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_news_published_at 
+    ON market_news (published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_news_coin 
+    ON market_news (coin);
+CREATE INDEX IF NOT EXISTS idx_market_news_category 
+    ON market_news (category);
+
+-- 8. REAL-TIME STRATEGY PERFORMANCE VIEW
 CREATE OR REPLACE VIEW strategy_performance_view AS
 SELECT
     strategy_name,
@@ -211,13 +232,14 @@ SELECT
 FROM trade_executions
 GROUP BY strategy_name;
 
--- 8. ROW LEVEL SECURITY (RLS) POLICIES
+-- 9. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE bot_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_executions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_autopsies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bot_lessons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_news ENABLE ROW LEVEL SECURITY;
 
 -- Clean existing policies before recreating
 DROP POLICY IF EXISTS "Authenticated users full access to bot_config" ON bot_config;
@@ -226,6 +248,7 @@ DROP POLICY IF EXISTS "Authenticated users full access to ai_audit_logs" ON ai_a
 DROP POLICY IF EXISTS "Authenticated users full access to trade_executions" ON trade_executions;
 DROP POLICY IF EXISTS "Authenticated users full access to trade_autopsies" ON trade_autopsies;
 DROP POLICY IF EXISTS "Authenticated users full access to bot_lessons" ON bot_lessons;
+DROP POLICY IF EXISTS "Authenticated users full access to market_news" ON market_news;
 
 DROP POLICY IF EXISTS "Service role full access to bot_config" ON bot_config;
 DROP POLICY IF EXISTS "Service role full access to account_snapshots" ON account_snapshots;
@@ -233,6 +256,7 @@ DROP POLICY IF EXISTS "Service role full access to ai_audit_logs" ON ai_audit_lo
 DROP POLICY IF EXISTS "Service role full access to trade_executions" ON trade_executions;
 DROP POLICY IF EXISTS "Service role full access to trade_autopsies" ON trade_autopsies;
 DROP POLICY IF EXISTS "Service role full access to bot_lessons" ON bot_lessons;
+DROP POLICY IF EXISTS "Service role full access to market_news" ON market_news;
 
 DROP POLICY IF EXISTS "Anon read access to bot_config" ON bot_config;
 DROP POLICY IF EXISTS "Anon read access to account_snapshots" ON account_snapshots;
@@ -240,6 +264,7 @@ DROP POLICY IF EXISTS "Anon read access to ai_audit_logs" ON ai_audit_logs;
 DROP POLICY IF EXISTS "Anon read access to trade_executions" ON trade_executions;
 DROP POLICY IF EXISTS "Anon read access to trade_autopsies" ON trade_autopsies;
 DROP POLICY IF EXISTS "Anon read access to bot_lessons" ON bot_lessons;
+DROP POLICY IF EXISTS "Anon read access to market_news" ON market_news;
 
 -- Allow authenticated users full read/write access
 CREATE POLICY "Authenticated users full access to bot_config"
@@ -260,6 +285,9 @@ CREATE POLICY "Authenticated users full access to trade_autopsies"
 CREATE POLICY "Authenticated users full access to bot_lessons"
     ON bot_lessons FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+CREATE POLICY "Authenticated users full access to market_news"
+    ON market_news FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
 -- Allow service_role full access bypass for backend worker/bot
 CREATE POLICY "Service role full access to bot_config"
     ON bot_config FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -278,6 +306,9 @@ CREATE POLICY "Service role full access to trade_autopsies"
 
 CREATE POLICY "Service role full access to bot_lessons"
     ON bot_lessons FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+CREATE POLICY "Service role full access to market_news"
+    ON market_news FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- Allow anon read access for dashboard display if needed
 CREATE POLICY "Anon read access to bot_config"
@@ -298,7 +329,10 @@ CREATE POLICY "Anon read access to trade_autopsies"
 CREATE POLICY "Anon read access to bot_lessons"
     ON bot_lessons FOR SELECT TO anon USING (true);
 
--- 9. ADD TABLES TO SUPABASE REALTIME PUBLICATION SAFELY
+CREATE POLICY "Anon read access to market_news"
+    ON market_news FOR SELECT TO anon USING (true);
+
+-- 10. ADD TABLES TO SUPABASE REALTIME PUBLICATION SAFELY
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
@@ -319,6 +353,9 @@ BEGIN
         END IF;
         IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'bot_lessons') THEN
             ALTER PUBLICATION supabase_realtime ADD TABLE bot_lessons;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'market_news') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE market_news;
         END IF;
     END IF;
 END $$;
