@@ -219,6 +219,28 @@ ALTER TABLE trade_executions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_autopsies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bot_lessons ENABLE ROW LEVEL SECURITY;
 
+-- Clean existing policies before recreating
+DROP POLICY IF EXISTS "Authenticated users full access to bot_config" ON bot_config;
+DROP POLICY IF EXISTS "Authenticated users full access to account_snapshots" ON account_snapshots;
+DROP POLICY IF EXISTS "Authenticated users full access to ai_audit_logs" ON ai_audit_logs;
+DROP POLICY IF EXISTS "Authenticated users full access to trade_executions" ON trade_executions;
+DROP POLICY IF EXISTS "Authenticated users full access to trade_autopsies" ON trade_autopsies;
+DROP POLICY IF EXISTS "Authenticated users full access to bot_lessons" ON bot_lessons;
+
+DROP POLICY IF EXISTS "Service role full access to bot_config" ON bot_config;
+DROP POLICY IF EXISTS "Service role full access to account_snapshots" ON account_snapshots;
+DROP POLICY IF EXISTS "Service role full access to ai_audit_logs" ON ai_audit_logs;
+DROP POLICY IF EXISTS "Service role full access to trade_executions" ON trade_executions;
+DROP POLICY IF EXISTS "Service role full access to trade_autopsies" ON trade_autopsies;
+DROP POLICY IF EXISTS "Service role full access to bot_lessons" ON bot_lessons;
+
+DROP POLICY IF EXISTS "Anon read access to bot_config" ON bot_config;
+DROP POLICY IF EXISTS "Anon read access to account_snapshots" ON account_snapshots;
+DROP POLICY IF EXISTS "Anon read access to ai_audit_logs" ON ai_audit_logs;
+DROP POLICY IF EXISTS "Anon read access to trade_executions" ON trade_executions;
+DROP POLICY IF EXISTS "Anon read access to trade_autopsies" ON trade_autopsies;
+DROP POLICY IF EXISTS "Anon read access to bot_lessons" ON bot_lessons;
+
 -- Allow authenticated users full read/write access
 CREATE POLICY "Authenticated users full access to bot_config"
     ON bot_config FOR ALL TO authenticated USING (true) WITH CHECK (true);
@@ -257,7 +279,7 @@ CREATE POLICY "Service role full access to trade_autopsies"
 CREATE POLICY "Service role full access to bot_lessons"
     ON bot_lessons FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Also allow anon read on bot_config, account_snapshots, strategy_performance_view for dashboard display if needed
+-- Allow anon read access for dashboard display if needed
 CREATE POLICY "Anon read access to bot_config"
     ON bot_config FOR SELECT TO anon USING (true);
 
@@ -276,15 +298,27 @@ CREATE POLICY "Anon read access to trade_autopsies"
 CREATE POLICY "Anon read access to bot_lessons"
     ON bot_lessons FOR SELECT TO anon USING (true);
 
--- 9. ADD TABLES TO SUPABASE REALTIME PUBLICATION
+-- 9. ADD TABLES TO SUPABASE REALTIME PUBLICATION SAFELY
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE bot_config;
-        ALTER PUBLICATION supabase_realtime ADD TABLE account_snapshots;
-        ALTER PUBLICATION supabase_realtime ADD TABLE ai_audit_logs;
-        ALTER PUBLICATION supabase_realtime ADD TABLE trade_executions;
-        ALTER PUBLICATION supabase_realtime ADD TABLE trade_autopsies;
-        ALTER PUBLICATION supabase_realtime ADD TABLE bot_lessons;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'bot_config') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE bot_config;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'account_snapshots') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE account_snapshots;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'ai_audit_logs') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE ai_audit_logs;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'trade_executions') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE trade_executions;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'trade_autopsies') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE trade_autopsies;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'bot_lessons') THEN
+            ALTER PUBLICATION supabase_realtime ADD TABLE bot_lessons;
+        END IF;
     END IF;
 END $$;
