@@ -28,5 +28,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy bot application files
 COPY . .
 
+EXPOSE 80
+
 # Run bot in unbuffered mode
 CMD ["python", "-u", "bot.py"]

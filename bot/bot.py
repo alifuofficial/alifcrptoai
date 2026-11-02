@@ -25,9 +25,37 @@ from typing import Dict, Any, List, Optional, Tuple
 import ccxt
 import pandas as pd
 import numpy as np
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from openai import OpenAI
 from supabase import create_client, Client
+
+class BotHealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        payload = json.dumps({
+            "status": "ONLINE",
+            "service": "alifcrptoai-bot",
+            "author": "Alifu Haji",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }).encode("utf-8")
+        self.wfile.write(payload)
+
+    def log_message(self, format, *args):
+        pass  # Suppress health-check polling noise in logs
+
+def start_health_server(port: int = 80):
+    """Starts a lightweight daemon HTTP health server on port 80 for CapRover swarm health checks."""
+    try:
+        server = HTTPServer(("0.0.0.0", port), BotHealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        print(f"[bot] CapRover Swarm Health server active on port {port}")
+    except Exception as exc:
+        print(f"[bot] Note: Health server port {port} unavailable ({exc}); continuing worker loop.")
 
 from strategies import evaluate_enabled_strategies, calc_indicators
 from news_macro import check_usd_macro_blackout, fetch_crypto_headlines
@@ -934,6 +962,9 @@ def run_master_loop():
     print(" Author & Developer: Alifu Haji (Individual Developer)")
     print(" Target: Contabo VPS (6 vCPU, 12GB RAM) via CapRover")
     print("==============================================================================")
+
+    # Start health HTTP listener for CapRover swarm healthchecks
+    start_health_server(80)
 
     supabase = get_supabase_client()
     poll_seconds = int(os.getenv("POLL_INTERVAL_SECONDS", 15))
