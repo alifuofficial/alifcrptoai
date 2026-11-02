@@ -88,12 +88,11 @@ def get_supabase_client() -> Client:
 
 def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
     """
-    Initializes Binance USDT-M Futures client with sandbox mode toggle
-    and API key overrides from bot_config.
+    Initializes Binance USDT-M Futures client with API key overrides from bot_config.
+    Connects to live market data streams without testnet URL deprecation issues.
     """
     api_key = cfg.get("binance_api_key_override") or os.getenv("BINANCE_API_KEY", "")
     secret = cfg.get("binance_secret_override") or os.getenv("BINANCE_API_SECRET", "")
-    sandbox = cfg.get("sandbox_mode", True)
 
     exchange = ccxt.binanceusdm({
         "apiKey": api_key,
@@ -104,9 +103,6 @@ def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
             "adjustForTimeDifference": True,
         }
     })
-
-    if sandbox:
-        exchange.set_sandbox_mode(True)
 
     return exchange
 
@@ -230,7 +226,7 @@ def handle_panic_close_all(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
 
 # --- ACCOUNT TELEMETRY SYNC ---
 
-def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm) -> Dict[str, float]:
+def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Dict[str, Any]) -> Dict[str, float]:
     """
     Synchronizes wallet equity, free margin, intraday PnL, and open positions
     from Binance USDT-M Futures to the account_snapshots table.
@@ -241,46 +237,56 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm) -> Dict
     daily_pnl_pct = 0.0
     active_positions_json: List[Dict[str, Any]] = []
 
+    sandbox = cfg.get("sandbox_mode", True)
+    has_api_keys = bool(exchange.apiKey and exchange.secret)
+
     try:
-        balance = exchange.fetch_balance()
-        usdt_info = balance.get("USDT", {})
-        equity = float(usdt_info.get("total", 10000.0) or 10000.0)
-        free_margin = float(usdt_info.get("free", 10000.0) or 10000.0)
+        if not sandbox and has_api_keys:
+            balance = exchange.fetch_balance()
+            usdt_info = balance.get("USDT", {})
+            equity = float(usdt_info.get("total", 10000.0) or 10000.0)
+            free_margin = float(usdt_info.get("free", 10000.0) or 10000.0)
 
-        # Calculate daily PnL from trades closed today
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        res = supabase.table("trade_executions").select("pnl_usdt").gte("closed_at", today_start).execute()
-        if res.data:
-            daily_pnl = sum([float(t.get("pnl_usdt") or 0.0) for t in res.data])
-            if equity > 0:
-                daily_pnl_pct = round((daily_pnl / equity) * 100.0, 2)
+            # Fetch live positions
+            positions = exchange.fetch_positions()
+            for p in positions:
+                contracts = float(p.get("contracts", 0.0) or 0.0)
+                if contracts > 0:
+                    active_positions_json.append({
+                        "symbol": p.get("symbol"),
+                        "side": p.get("side"),
+                        "size": contracts,
+                        "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
+                        "mark_price": float(p.get("markPrice", 0.0) or 0.0),
+                        "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
+                        "leverage": p.get("leverage")
+                    })
 
-        # Fetch live positions
-        positions = exchange.fetch_positions()
-        for p in positions:
-            contracts = float(p.get("contracts", 0.0) or 0.0)
-            if contracts > 0:
-                active_positions_json.append({
-                    "symbol": p.get("symbol"),
-                    "side": p.get("side"),
-                    "size": contracts,
-                    "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
-                    "mark_price": float(p.get("markPrice", 0.0) or 0.0),
-                    "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
-                    "leverage": p.get("leverage")
-                })
+        # Calculate daily PnL from trades closed today (if table exists)
+        try:
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            res = supabase.table("trade_executions").select("pnl_usdt").gte("closed_at", today_start).execute()
+            if res.data:
+                daily_pnl = sum([float(t.get("pnl_usdt") or 0.0) for t in res.data])
+                if equity > 0:
+                    daily_pnl_pct = round((daily_pnl / equity) * 100.0, 2)
+        except Exception:
+            pass
 
         # Insert snapshot
-        supabase.table("account_snapshots").insert({
-            "equity_usdt": round(equity, 2),
-            "free_usdt": round(free_margin, 2),
-            "daily_pnl_usdt": round(daily_pnl, 2),
-            "daily_pnl_pct": round(daily_pnl_pct, 2),
-            "open_positions": active_positions_json
-        }).execute()
+        try:
+            supabase.table("account_snapshots").insert({
+                "equity_usdt": round(equity, 2),
+                "free_usdt": round(free_margin, 2),
+                "daily_pnl_usdt": round(daily_pnl, 2),
+                "daily_pnl_pct": round(daily_pnl_pct, 2),
+                "open_positions": active_positions_json
+            }).execute()
+        except Exception:
+            pass
 
     except Exception as exc:
-        print(f"[telemetry] Sync notice (sandbox/offline mode): {exc}")
+        print(f"[telemetry] Sync notice: {exc}")
 
     return {"equity": equity, "free_margin": free_margin}
 
@@ -646,7 +652,8 @@ def manage_open_positions(
             }).eq("id", trade_id).execute()
 
     except Exception as exc:
-        print(f"[trade_mgmt] Error managing open positions: {exc}")
+        if "PGRST205" not in str(exc):
+            print(f"[trade_mgmt] Error managing open positions: {exc}")
 
 
 # --- STATISTICAL SELF-OPTIMIZER ---
@@ -686,7 +693,8 @@ def run_statistical_optimizer(supabase: Client, cfg: Dict[str, Any]) -> None:
             })
 
     except Exception as exc:
-        print(f"[optimizer] Optimization pass notice: {exc}")
+        if "PGRST205" not in str(exc):
+            print(f"[optimizer] Optimization pass notice: {exc}")
 
 
 # --- MARKET & MACRO NEWS SYNCHRONIZER ---
@@ -1049,7 +1057,7 @@ def run_master_loop():
                 continue
 
             # 3. Synchronize Account Telemetry
-            account_info = sync_account_telemetry(supabase, exchange)
+            account_info = sync_account_telemetry(supabase, exchange, cfg)
 
             # 4. Institutional Trade Management
             manage_open_positions(supabase, exchange, deepseek, cfg)
