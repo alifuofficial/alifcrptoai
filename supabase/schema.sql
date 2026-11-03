@@ -368,13 +368,16 @@ END $$;
 -- ==============================================================================
 DO $$
 BEGIN
-    -- Add deepseek_base_url column if not present
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'bot_config' AND column_name = 'deepseek_base_url'
-    ) THEN
-        ALTER TABLE bot_config ADD COLUMN deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
-    END IF;
+    -- Ensure all override and settings columns exist on bot_config
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS binance_api_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS binance_secret_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS deepseek_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS telegram_token_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS telegram_chat_id_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
+
+    -- Ensure singleton row (id = 1) exists
+    INSERT INTO bot_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
     -- Update active_strategies column default to include all 6 strategies
     ALTER TABLE bot_config 

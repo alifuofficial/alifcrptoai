@@ -300,11 +300,22 @@ export default function CommandCenterPage() {
   // 2. Fetch Data & Subscriptions
   const fetchAllData = async () => {
     try {
-      // Config
-      const { data: cfgData } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
-      if (cfgData) {
-        setConfig(cfgData);
-        setFormSettings(cfgData);
+      // Config: Fetch from Supabase, or auto-seed row 1 via /api/config if missing
+      try {
+        const { data: cfgData } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+        if (cfgData) {
+          setConfig(cfgData);
+          setFormSettings(cfgData);
+        } else {
+          const res = await fetch("/api/config");
+          const json = await res.json();
+          if (json.data) {
+            setConfig(json.data);
+            setFormSettings(json.data);
+          }
+        }
+      } catch (cfgErr) {
+        console.warn("Config load notice:", cfgErr);
       }
 
       // Latest Snapshot
@@ -713,8 +724,8 @@ export default function CommandCenterPage() {
     }
   };
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setIsSavingConfig(true);
     try {
       const updates = {
@@ -731,23 +742,44 @@ export default function CommandCenterPage() {
         deepseek_model: formSettings.deepseek_model || "deepseek-chat",
         deepseek_base_url: formSettings.deepseek_base_url || "https://api.deepseek.com",
         symbols: formSettings.symbols || ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
-        binance_api_key_override: formSettings.binance_api_key_override || null,
-        binance_secret_override: formSettings.binance_secret_override || null,
-        deepseek_key_override: formSettings.deepseek_key_override || null,
-        telegram_token_override: formSettings.telegram_token_override || null,
-        telegram_chat_id_override: formSettings.telegram_chat_id_override || null,
-        updated_at: new Date().toISOString(),
+        binance_api_key_override: formSettings.binance_api_key_override?.trim() || null,
+        binance_secret_override: formSettings.binance_secret_override?.trim() || null,
+        deepseek_key_override: formSettings.deepseek_key_override?.trim() || null,
+        telegram_token_override: formSettings.telegram_token_override?.trim() || null,
+        telegram_chat_id_override: formSettings.telegram_chat_id_override?.trim() || null,
       };
 
-      const { error } = await supabase.from("bot_config").update(updates).eq("id", 1);
-      if (!error) {
-        showToast("Quantitative parameters updated successfully!");
-        if (config) setConfig({ ...config, ...updates });
+      // 1. Commit via server-side /api/config (guarantees upsert on row 1 and avoids client RLS silent drops)
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates }),
+      });
+
+      const json = await res.json();
+      if (json.success && json.data) {
+        setConfig(json.data);
+        setFormSettings(json.data);
+        showToast("Configuration & API keys successfully committed to database!", "success");
       } else {
-        showToast(`Save error: ${error.message}`);
+        // Fallback: client Supabase upsert
+        const { data: upsertData, error: upsertErr } = await supabase
+          .from("bot_config")
+          .upsert({ id: 1, ...updates, updated_at: new Date().toISOString() }, { onConflict: "id" })
+          .select()
+          .single();
+
+        if (!upsertErr && upsertData) {
+          setConfig(upsertData);
+          setFormSettings(upsertData);
+          showToast("Settings saved to database successfully!", "success");
+        } else {
+          const errDetail = json.error || upsertErr?.message || "Unknown error";
+          showToast(`Database save failed: ${errDetail}`, "error");
+        }
       }
     } catch (err: any) {
-      showToast(`Error: ${err.message}`);
+      showToast(`Save error: ${err.message}`, "error");
     } finally {
       setIsSavingConfig(false);
     }
@@ -2946,14 +2978,25 @@ export default function CommandCenterPage() {
 
               {/* Encrypted API Keys */}
               <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
-                <div>
-                  <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
-                    <Shield className="h-4 w-4" />
-                    <span>Encrypted API Key Overrides</span>
-                  </h3>
-                  <p className="text-xs text-textMuted mt-0.5">
-                    Leave empty to fallback to container environment variables. Values entered here take immediate precedence.
-                  </p>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-border">
+                  <div>
+                    <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
+                      <Shield className="h-4 w-4" />
+                      <span>Encrypted API Key Overrides</span>
+                    </h3>
+                    <p className="text-xs text-textMuted mt-0.5">
+                      Leave empty to fallback to container environment variables. Values entered here take immediate precedence.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveSettings()}
+                    disabled={isSavingConfig}
+                    className="px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer self-start sm:self-auto disabled:opacity-50"
+                  >
+                    {isSavingConfig ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    <span>{isSavingConfig ? "Saving to Database..." : "Save API Keys Now"}</span>
+                  </button>
                 </div>
 
                 {/* Sub-Group 1: Binance Credentials */}
