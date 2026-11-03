@@ -502,6 +502,19 @@ export default function CommandCenterPage() {
       const pnl = Number(latestSnapshot?.daily_pnl_usdt ?? 0.0);
       const pnlPct = Number(latestSnapshot?.daily_pnl_pct ?? 0.0);
 
+      // Optimistically update local dashboard state immediately
+      const optimisticSnap = {
+        id: Date.now(),
+        equity_usdt: liveEquity,
+        free_usdt: liveFree,
+        daily_pnl_usdt: pnl,
+        daily_pnl_pct: pnlPct,
+        open_positions: openTrades || [],
+        created_at: new Date().toISOString(),
+      };
+      setLatestSnapshot(optimisticSnap);
+      setSnapshotsHistory((prev) => [...prev, optimisticSnap]);
+
       const { data: savedSnap, error } = await supabase
         .from("account_snapshots")
         .insert({
@@ -515,11 +528,15 @@ export default function CommandCenterPage() {
         .single();
 
       if (!error && savedSnap) {
-        setSnapshotsHistory((prev) => [...prev, savedSnap]);
+        setSnapshotsHistory((prev) => [...prev.filter((s) => s.id !== optimisticSnap.id), savedSnap]);
         setLatestSnapshot(savedSnap);
         showToast(`Synchronized live mark: $${liveEquity.toFixed(2)} USDT`, "success");
       } else if (error) {
-        showToast(`Snapshot error: ${error.message}`, "error");
+        if (error.message?.includes("account_snapshots") || error.code === "PGRST204" || error.code === "42P01") {
+          showToast(`Mark updated ($${liveEquity.toFixed(2)}), but Supabase table 'account_snapshots' is missing. Please run schema.sql in Supabase SQL editor.`, "info");
+        } else {
+          showToast(`Snapshot error: ${error.message}`, "error");
+        }
       }
     } catch (err: any) {
       showToast(`Snapshot error: ${err.message}`, "error");
