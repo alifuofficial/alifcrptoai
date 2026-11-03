@@ -379,6 +379,9 @@ BEGIN
     -- Ensure singleton row (id = 1) exists
     INSERT INTO bot_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
+    -- Disable RLS on bot_config singleton table so dashboard operator can save settings
+    ALTER TABLE bot_config DISABLE ROW LEVEL SECURITY;
+
     -- Update active_strategies column default to include all 6 strategies
     ALTER TABLE bot_config 
     ALTER COLUMN active_strategies SET DEFAULT ARRAY[
