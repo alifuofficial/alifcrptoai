@@ -290,8 +290,8 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
                 "daily_pnl_pct": round(daily_pnl_pct, 2),
                 "open_positions": active_positions_json
             }).execute()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[telemetry] Snapshot insert notice: {exc}")
 
     except Exception as exc:
         print(f"[telemetry] Sync notice: {exc}")

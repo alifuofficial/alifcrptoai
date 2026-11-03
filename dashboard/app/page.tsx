@@ -4,6 +4,31 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Filler,
+  Legend,
+  ChartOptions,
+} from "chart.js";
+import { Line } from "react-chartjs-2";
+
+// Register Chart.js core components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Filler,
+  Legend
+);
+import {
   Activity,
   LayoutDashboard,
   Layers,
@@ -268,13 +293,8 @@ export default function CommandCenterPage() {
         .maybeSingle();
       if (snapData) setLatestSnapshot(snapData);
 
-      // Snapshot History (for chart)
-      const { data: histData } = await supabase
-        .from("account_snapshots")
-        .select("*")
-        .order("created_at", { ascending: true })
-        .limit(50);
-      if (histData) setSnapshotsHistory(histData);
+      // Snapshot History from Database based on active timeframe
+      await fetchSnapshotsByTimeframe(chartTimeframe);
 
       // Strategy Performance
       const { data: perfData } = await supabase.from("strategy_performance_view").select("*");
@@ -365,6 +385,88 @@ export default function CommandCenterPage() {
     }
   };
 
+  const fetchSnapshotsByTimeframe = async (tf: "24H" | "7D" | "30D" | "ALL") => {
+    try {
+      let query = supabase
+        .from("account_snapshots")
+        .select("*")
+        .order("created_at", { ascending: true });
+
+      const now = new Date();
+      if (tf === "24H") {
+        const t24 = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+        query = query.gte("created_at", t24);
+      } else if (tf === "7D") {
+        const t7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        query = query.gte("created_at", t7);
+      } else if (tf === "30D") {
+        const t30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        query = query.gte("created_at", t30);
+      }
+
+      const { data, error } = await query.limit(500);
+      if (!error && data) {
+        if (data.length > 0) {
+          setSnapshotsHistory(data);
+          setLatestSnapshot(data[data.length - 1]);
+        } else if (tf === "ALL") {
+          // If completely empty database, record the initial baseline snapshot directly
+          const initialEquity = 10000.0;
+          const { data: seeded } = await supabase
+            .from("account_snapshots")
+            .insert({
+              equity_usdt: initialEquity,
+              free_usdt: initialEquity,
+              daily_pnl_usdt: 0.0,
+              daily_pnl_pct: 0.0,
+              open_positions: [],
+            })
+            .select()
+            .single();
+          if (seeded) {
+            setSnapshotsHistory([seeded]);
+            setLatestSnapshot(seeded);
+          }
+        } else {
+          setSnapshotsHistory([]);
+        }
+      }
+    } catch (err) {
+      console.warn("Snapshots fetch notice:", err);
+    }
+  };
+
+  const recordSnapshotNow = async () => {
+    try {
+      const eq = Number(latestSnapshot?.equity_usdt || 10000.0);
+      const free = Number(latestSnapshot?.free_usdt || 10000.0);
+      const pnl = Number(latestSnapshot?.daily_pnl_usdt || 0.0);
+      const pnlPct = Number(latestSnapshot?.daily_pnl_pct || 0.0);
+
+      const { data, error } = await supabase
+        .from("account_snapshots")
+        .insert({
+          equity_usdt: eq,
+          free_usdt: free,
+          daily_pnl_usdt: pnl,
+          daily_pnl_pct: pnlPct,
+          open_positions: openTrades || [],
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        setSnapshotsHistory((prev) => [...prev, data]);
+        setLatestSnapshot(data);
+        showToast("Synchronized real equity snapshot to database");
+      } else if (error) {
+        showToast(`Snapshot error: ${error.message}`);
+      }
+    } catch (err: any) {
+      showToast(`Snapshot error: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     fetchAllData();
 
@@ -380,7 +482,7 @@ export default function CommandCenterPage() {
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "account_snapshots" }, (payload) => {
         if (payload.new) {
           setLatestSnapshot(payload.new as AccountSnapshot);
-          setSnapshotsHistory((prev) => [...prev, payload.new as AccountSnapshot].slice(-50));
+          setSnapshotsHistory((prev) => [...prev, payload.new as AccountSnapshot]);
         }
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "trade_executions" }, () => {
@@ -406,6 +508,10 @@ export default function CommandCenterPage() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    fetchSnapshotsByTimeframe(chartTimeframe);
+  }, [chartTimeframe]);
 
   const showToast = (msg: string) => {
     setStatusNotification(msg);
@@ -560,46 +666,190 @@ export default function CommandCenterPage() {
     });
   }, [newsItems, selectedNewsCategory, newsSearchQuery]);
 
-  // Synthetic equity curve for SVG Area Chart
-  const chartPoints = useMemo(() => {
-    if (snapshotsHistory.length >= 2) {
-      return snapshotsHistory.map((s, idx) => ({
-        x: idx,
-        y: Number(s.equity_usdt || 10000),
-        pnl: Number(s.daily_pnl_usdt || 0),
-        time: new Date(s.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      }));
+  // Real Chart.js Dataset mapped from PostgreSQL account_snapshots database ledger
+  const chartJsData = useMemo(() => {
+    let points: { label: string; value: number; pnl: number; dateStr: string }[] = [];
+
+    if (snapshotsHistory.length > 0) {
+      points = snapshotsHistory.map((s) => {
+        const d = new Date(s.created_at);
+        const label =
+          chartTimeframe === "24H"
+            ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+        return {
+          label,
+          value: Number(s.equity_usdt || 10000.0),
+          pnl: Number(s.daily_pnl_usdt || 0.0),
+          dateStr: s.created_at,
+        };
+      });
+
+      if (points.length === 1) {
+        const p0 = points[0];
+        const prevTime = new Date(new Date(p0.dateStr).getTime() - 60 * 60 * 1000);
+        const prevLabel =
+          chartTimeframe === "24H"
+            ? prevTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : `${prevTime.toLocaleDateString([], { month: "short", day: "numeric" })} ${prevTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+        points = [
+          { label: prevLabel, value: p0.value, pnl: 0, dateStr: prevTime.toISOString() },
+          p0,
+        ];
+      }
+    } else {
+      const base = Number(latestSnapshot?.equity_usdt || 10000.0);
+      const now = new Date();
+      const past = new Date(now.getTime() - 60 * 60 * 1000);
+      points = [
+        {
+          label: past.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          value: base,
+          pnl: 0,
+          dateStr: past.toISOString(),
+        },
+        {
+          label: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          value: base,
+          pnl: Number(latestSnapshot?.daily_pnl_usdt || 0.0),
+          dateStr: now.toISOString(),
+        },
+      ];
     }
-    const base = Number(latestSnapshot?.equity_usdt || 10000);
-    return [
-      { x: 0, y: base * 0.997, pnl: -30, time: "09:00" },
-      { x: 1, y: base * 0.9985, pnl: -15, time: "11:00" },
-      { x: 2, y: base * 1.0015, pnl: 15, time: "13:00" },
-      { x: 3, y: base * 1.0035, pnl: 35, time: "15:00" },
-      { x: 4, y: base, pnl: Number(latestSnapshot?.daily_pnl_usdt || 0), time: "Current" },
-    ];
-  }, [snapshotsHistory, latestSnapshot]);
 
-  // Chart SVG Coordinates generator (viewBox 0 0 1000 200)
-  const svgPathData = useMemo(() => {
-    if (chartPoints.length < 2) return { path: "", min: 0, max: 0, coords: [] };
-    const values = chartPoints.map((p) => p.y);
-    const min = Math.min(...values) * 0.999;
-    const max = Math.max(...values) * 1.001;
-    const range = max - min || 1;
-    const width = 1000;
-    const height = 200;
+    return {
+      labels: points.map((p) => p.label),
+      datasets: [
+        {
+          label: "Equity (USDT)",
+          data: points.map((p) => p.value),
+          borderColor: "#2563eb",
+          backgroundColor: (context: any) => {
+            const chart = context.chart;
+            const { ctx, chartArea } = chart;
+            if (!chartArea) return "rgba(37, 99, 235, 0.1)";
+            const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            gradient.addColorStop(0, "rgba(37, 99, 235, 0.22)");
+            gradient.addColorStop(1, "rgba(37, 99, 235, 0.0)");
+            return gradient;
+          },
+          borderWidth: 2,
+          pointRadius: points.length > 60 ? 0 : 3,
+          pointHoverRadius: 6,
+          pointBackgroundColor: "#ffffff",
+          pointBorderColor: "#2563eb",
+          pointBorderWidth: 2,
+          pointHoverBackgroundColor: "#2563eb",
+          pointHoverBorderColor: "#ffffff",
+          pointHoverBorderWidth: 2,
+          fill: true,
+          tension: 0.35,
+        },
+      ],
+      points,
+    };
+  }, [snapshotsHistory, latestSnapshot, chartTimeframe]);
 
-    const coords = chartPoints.map((p, i) => {
-      const px = (i / (chartPoints.length - 1)) * width;
-      const py = height - ((p.y - min) / range) * (height - 40) - 20;
-      return { x: px, y: py };
-    });
+  const chartStats = useMemo(() => {
+    const values = chartJsData.points.map((p) => p.value);
+    if (!values.length) {
+      const base = Number(latestSnapshot?.equity_usdt || 10000.0);
+      return { min: base, max: base, start: "N/A", end: "Current", count: 0 };
+    }
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      start: chartJsData.points[0]?.label || "N/A",
+      end: chartJsData.points[chartJsData.points.length - 1]?.label || "Current",
+      count: chartJsData.points.length,
+    };
+  }, [chartJsData, latestSnapshot]);
 
-    const path = `M ${coords.map((c) => `${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" L ")}`;
+  const chartOptions: ChartOptions<"line"> = useMemo(() => {
+    const values = chartJsData.points.map((p) => p.value);
+    const minVal = values.length ? Math.min(...values) : 10000;
+    const maxVal = values.length ? Math.max(...values) : 10000;
+    const diff = maxVal - minVal;
+    const padding = diff === 0 ? 25 : Math.max(diff * 0.15, 10);
 
-    return { path, min, max, coords };
-  }, [chartPoints]);
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 400,
+        easing: "easeOutQuart",
+      },
+      interaction: {
+        mode: "index",
+        intersect: false,
+      },
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          enabled: true,
+          backgroundColor: "#0f172a",
+          titleColor: "#94a3b8",
+          titleFont: { size: 11, family: "Inter, sans-serif" },
+          bodyColor: "#ffffff",
+          bodyFont: { size: 12, weight: "bold", family: "Inter, sans-serif" },
+          borderColor: "#334155",
+          borderWidth: 1,
+          padding: 10,
+          boxPadding: 4,
+          usePointStyle: true,
+          callbacks: {
+            label: (context) => {
+              const val = Number(context.parsed.y || 0);
+              return ` Equity: $${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            },
+            afterLabel: (context) => {
+              const p = chartJsData.points[context.dataIndex];
+              if (p && p.pnl !== undefined) {
+                const sign = p.pnl >= 0 ? "+" : "";
+                return ` Realized P&L: ${sign}$${p.pnl.toFixed(2)}`;
+              }
+              return "";
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: {
+            display: true,
+            color: "#f1f5f9",
+          },
+          ticks: {
+            color: "#64748b",
+            font: { size: 10, family: "Inter, sans-serif" },
+            maxTicksLimit: 8,
+            maxRotation: 0,
+          },
+          border: {
+            display: false,
+          },
+        },
+        y: {
+          min: Math.floor(minVal - padding),
+          max: Math.ceil(maxVal + padding),
+          grid: {
+            display: true,
+            color: "#f1f5f9",
+          },
+          ticks: {
+            color: "#64748b",
+            font: { size: 10, family: "Inter, sans-serif" },
+            callback: (value) => `$${Number(value).toLocaleString()}`,
+          },
+          border: {
+            display: false,
+          },
+        },
+      },
+    };
+  }, [chartJsData]);
 
   return (
     <div className="bg-background text-textMain font-sans antialiased h-screen flex overflow-hidden selection:bg-brand-100 selection:text-brand-900">
@@ -987,85 +1237,78 @@ export default function CommandCenterPage() {
 
               {/* CHART SECTION */}
               <div className="bg-surface border border-border rounded-lg p-6">
-                <div className="flex justify-between items-start mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
                   <div>
-                    <h3 className="text-base font-semibold">Portfolio Performance &amp; Equity Growth</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-semibold text-textMain">Portfolio Performance &amp; Equity Growth</h3>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-brand-50 text-brand-600 border border-brand-100">
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse"></span>
+                        Live Ledger
+                      </span>
+                    </div>
                     <p className="text-xs text-textMuted mt-1">
                       Continuous capital valuation synchronized from Binance Futures account snapshots
                     </p>
                   </div>
-                  <div className="flex bg-slate-100 p-1 rounded-md">
-                    {(["24H", "7D", "30D", "ALL"] as const).map((tf) => (
-                      <button
-                        key={tf}
-                        onClick={() => setChartTimeframe(tf)}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
-                          chartTimeframe === tf
-                            ? "bg-surface text-textMain shadow-xs border border-border"
-                            : "text-textMuted hover:text-textMain"
-                        }`}
-                      >
-                        {tf}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={recordSnapshotNow}
+                      title="Record an instant balance snapshot to database"
+                      className="px-2.5 py-1 text-xs font-medium rounded border border-border bg-surface hover:bg-slate-50 text-textMuted hover:text-textMain flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3 text-brand-500" />
+                      <span>Sync Mark</span>
+                    </button>
+                    <div className="flex bg-slate-100 p-1 rounded-md">
+                      {(["24H", "7D", "30D", "ALL"] as const).map((tf) => (
+                        <button
+                          key={tf}
+                          onClick={() => setChartTimeframe(tf)}
+                          className={`px-3 py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
+                            chartTimeframe === tf
+                              ? "bg-surface text-textMain shadow-xs border border-border font-semibold"
+                              : "text-textMuted hover:text-textMain"
+                          }`}
+                        >
+                          {tf}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
-                {/* Chart Area */}
-                <div className="relative w-full h-64 flex flex-col justify-between">
-                  {/* Labels Top */}
-                  <div className="flex justify-between text-[11px] font-medium text-textMuted border-b border-border pb-2">
-                    <span>
-                      High: <span className="text-textMain tabular-nums">${svgPathData.max.toFixed(2)}</span>
+                {/* High / Low Bounds Header */}
+                <div className="flex justify-between items-center text-[11px] font-medium text-textMuted border-b border-border pb-2.5 mb-3">
+                  <span className="flex items-center gap-1.5">
+                    <span>High:</span>
+                    <span className="text-textMain font-bold tabular-nums">
+                      ${chartStats.max.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
-                    <span>
-                      Low: <span className="text-textMain tabular-nums">${svgPathData.min.toFixed(2)}</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span>Low:</span>
+                    <span className="text-textMain font-bold tabular-nums">
+                      ${chartStats.min.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
-                  </div>
+                  </span>
+                </div>
 
-                  {/* SVG Chart Line */}
-                  <div className="absolute inset-0 top-8 flex items-center justify-center">
-                    <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 1000 200">
-                      {/* Grid lines */}
-                      <line x1="0" y1="50" x2="1000" y2="50" stroke="#f1f5f9" strokeWidth="1" />
-                      <line x1="0" y1="100" x2="1000" y2="100" stroke="#f1f5f9" strokeWidth="1" />
-                      <line x1="0" y1="150" x2="1000" y2="150" stroke="#f1f5f9" strokeWidth="1" />
+                {/* Chart.js Canvas Container */}
+                <div className="relative w-full h-72">
+                  <Line data={chartJsData} options={chartOptions} />
+                </div>
 
-                      {/* Line */}
-                      {svgPathData.path && (
-                        <path
-                          d={svgPathData.path}
-                          fill="none"
-                          stroke="#2563eb"
-                          strokeWidth="2.5"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      )}
-
-                      {/* Data Points */}
-                      {svgPathData.coords.map((c, i) => (
-                        <circle
-                          key={i}
-                          cx={c.x}
-                          cy={c.y}
-                          r="4"
-                          fill="#ffffff"
-                          stroke="#2563eb"
-                          strokeWidth="2"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
-                    </svg>
-                  </div>
-
-                  {/* Labels Bottom */}
-                  <div className="flex justify-between text-[11px] font-medium text-textMuted mt-2">
-                    <span>Start: {chartPoints[0]?.time}</span>
-                    <span className="flex items-center text-brand-600">
-                      <div className="w-2 h-2 rounded-full bg-brand-500 mr-1.5"></div> Cumulative Equity
+                {/* Labels Bottom */}
+                <div className="flex flex-wrap items-center justify-between text-[11px] font-medium text-textMuted border-t border-border pt-3 mt-2">
+                  <span>Start: {chartStats.start}</span>
+                  <span className="flex items-center text-brand-600 font-semibold gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-brand-500"></span>
+                    <span>Cumulative Equity</span>
+                    <span className="bg-brand-50 text-brand-700 text-[10px] font-mono px-1.5 py-0.2 rounded border border-brand-100 ml-1">
+                      {chartStats.count} Points
                     </span>
-                    <span>Latest: {chartPoints[chartPoints.length - 1]?.time}</span>
-                  </div>
+                  </span>
+                  <span>Latest: {chartStats.end}</span>
                 </div>
               </div>
 
