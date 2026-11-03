@@ -66,6 +66,12 @@ import {
   Shield,
   CheckCircle2,
   XCircle,
+  Loader2,
+  Send,
+  Server,
+  Wifi,
+  WifiOff,
+  Check,
 } from "lucide-react";
 
 // --- TYPES ---
@@ -238,7 +244,24 @@ export default function CommandCenterPage() {
   const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
-  const [statusNotification, setStatusNotification] = useState<string | null>(null);
+  const [toastNotification, setToastNotification] = useState<{
+    message: string;
+    type: "success" | "error" | "info";
+  } | null>(null);
+
+  // API Health Diagnostics State
+  const [apiHealth, setApiHealth] = useState<{
+    binance: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    deepseek: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    telegram: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    database: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+  }>({
+    binance: { status: "idle" },
+    deepseek: { status: "idle" },
+    telegram: { status: "idle" },
+    database: { status: "idle" },
+  });
+  const [isTestingAll, setIsTestingAll] = useState(false);
 
   // News States
   const [newsItems, setNewsItems] = useState<MarketNewsItem[]>([]);
@@ -513,9 +536,132 @@ export default function CommandCenterPage() {
     fetchSnapshotsByTimeframe(chartTimeframe);
   }, [chartTimeframe]);
 
-  const showToast = (msg: string) => {
-    setStatusNotification(msg);
-    setTimeout(() => setStatusNotification(null), 3500);
+  const showToast = (msg: string, type: "success" | "error" | "info" = "info") => {
+    setToastNotification({ message: msg, type });
+    setTimeout(() => setToastNotification(null), 4500);
+  };
+
+  const testSingleApi = async (service: "binance" | "deepseek" | "telegram" | "database") => {
+    setApiHealth((prev) => ({
+      ...prev,
+      [service]: { status: "testing", message: "Connecting & verifying endpoint..." },
+    }));
+
+    try {
+      const res = await fetch("/api/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service,
+          params: {
+            binance: {
+              apiKey: formSettings.binance_api_key_override,
+              secret: formSettings.binance_secret_override,
+              sandbox: config?.sandbox_mode,
+            },
+            deepseek: {
+              baseUrl: formSettings.deepseek_base_url,
+              apiKey: formSettings.deepseek_key_override,
+              model: formSettings.deepseek_model,
+            },
+            telegram: {
+              token: formSettings.telegram_token_override,
+              chatId: formSettings.telegram_chat_id_override,
+              sendTestMessage: true,
+            },
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setApiHealth((prev) => ({
+          ...prev,
+          [service]: { status: "success", message: data.message, latency: data.latencyMs },
+        }));
+        showToast(data.message || `${service.toUpperCase()} connected successfully!`, "success");
+      } else {
+        setApiHealth((prev) => ({
+          ...prev,
+          [service]: { status: "error", message: data.message, latency: data.latencyMs },
+        }));
+        showToast(data.message || `${service.toUpperCase()} connection failed!`, "error");
+      }
+    } catch (err: any) {
+      setApiHealth((prev) => ({
+        ...prev,
+        [service]: { status: "error", message: err.message },
+      }));
+      showToast(`Diagnostic failed: ${err.message}`, "error");
+    }
+  };
+
+  const testAllApis = async () => {
+    setIsTestingAll(true);
+    setApiHealth({
+      binance: { status: "testing", message: "Testing gateway..." },
+      deepseek: { status: "testing", message: "Testing model..." },
+      telegram: { status: "testing", message: "Testing alerts..." },
+      database: { status: "testing", message: "Testing ledger..." },
+    });
+
+    try {
+      const res = await fetch("/api/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service: "all",
+          params: {
+            binance: {
+              apiKey: formSettings.binance_api_key_override,
+              secret: formSettings.binance_secret_override,
+              sandbox: config?.sandbox_mode,
+            },
+            deepseek: {
+              baseUrl: formSettings.deepseek_base_url,
+              apiKey: formSettings.deepseek_key_override,
+              model: formSettings.deepseek_model,
+            },
+            telegram: {
+              token: formSettings.telegram_token_override,
+              chatId: formSettings.telegram_chat_id_override,
+              sendTestMessage: true,
+            },
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (data.results) {
+        const b = data.results.binance;
+        const d = data.results.deepseek;
+        const t = data.results.telegram;
+        const db = data.results.database;
+
+        setApiHealth({
+          binance: { status: b.success ? "success" : "error", message: b.message, latency: b.latencyMs },
+          deepseek: { status: d.success ? "success" : "error", message: d.message, latency: d.latencyMs },
+          telegram: { status: t.success ? "success" : "error", message: t.message, latency: t.latencyMs },
+          database: { status: db.success ? "success" : "error", message: db.message, latency: db.latencyMs },
+        });
+
+        if (data.success) {
+          showToast("All trading APIs & services connected successfully!", "success");
+        } else {
+          const failedServices = [
+            !b.success && "Binance",
+            !d.success && "AI Model",
+            !t.success && "Telegram",
+            !db.success && "Database",
+          ].filter(Boolean).join(", ");
+          showToast(`Issues detected on: ${failedServices}. Check credentials.`, "error");
+        }
+      }
+    } catch (err: any) {
+      showToast(`Diagnostic suite error: ${err.message}`, "error");
+    } finally {
+      setIsTestingAll(false);
+    }
   };
 
   // Actions
@@ -853,11 +999,25 @@ export default function CommandCenterPage() {
 
   return (
     <div className="bg-background text-textMain font-sans antialiased h-screen flex overflow-hidden selection:bg-brand-100 selection:text-brand-900">
-      {/* Toast Notification */}
-      {statusNotification && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-md border border-brand-500 bg-surface px-4 py-3 text-xs font-semibold text-brand-600 shadow-md animate-bounce">
-          <Zap className="h-4 w-4 text-brand-600" />
-          <span>{statusNotification}</span>
+      {/* Upgraded Toast Notification */}
+      {toastNotification && (
+        <div
+          className={`fixed top-5 right-5 z-50 flex items-center gap-2.5 rounded-lg border px-4 py-3 text-xs font-semibold shadow-lg transition-all animate-in fade-in slide-in-from-top-2 duration-200 max-w-md ${
+            toastNotification.type === "success"
+              ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-emerald-500/10"
+              : toastNotification.type === "error"
+              ? "border-rose-500 bg-rose-50 text-rose-800 shadow-rose-500/10"
+              : "border-brand-500 bg-surface text-brand-800 shadow-brand-500/10"
+          }`}
+        >
+          {toastNotification.type === "success" ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+          ) : toastNotification.type === "error" ? (
+            <XCircle className="h-4 w-4 text-rose-600 shrink-0" />
+          ) : (
+            <Zap className="h-4 w-4 text-brand-600 shrink-0" />
+          )}
+          <span className="leading-snug">{toastNotification.message}</span>
         </div>
       )}
 
@@ -2198,6 +2358,333 @@ export default function CommandCenterPage() {
                 </p>
               </div>
 
+              {/* API CONNECTIVITY & LIVE HEALTH MATRIX */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-4 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-border">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-textMain flex items-center gap-2">
+                        <Wifi className="h-4 w-4 text-brand-500" />
+                        <span>API Connectivity &amp; Live Health Diagnostics</span>
+                      </h3>
+                      <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-100 text-slate-700 font-mono">
+                        Real-time Probe
+                      </span>
+                    </div>
+                    <p className="text-xs text-textMuted mt-0.5">
+                      Verify authentication, ping latency, and operational health for Binance Futures, AI models, and Telegram alerts
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={testAllApis}
+                    disabled={isTestingAll}
+                    className="px-3.5 py-1.5 rounded-md border border-brand-500 bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer self-start sm:self-auto disabled:opacity-60 shadow-2xs"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isTestingAll ? "animate-spin text-brand-600" : ""}`} />
+                    <span>{isTestingAll ? "Testing All APIs..." : "Test All Connections"}</span>
+                  </button>
+                </div>
+
+                {/* 4 Health Cards Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Service 1: Binance */}
+                  <div className="p-4 rounded-md border border-border bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-md bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 font-bold text-xs">
+                          BN
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-textMain">Binance USD-M Futures</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                                config?.sandbox_mode ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                              }`}
+                            >
+                              {config?.sandbox_mode ? "Sandbox / Testnet" : "Live Binance"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-textMuted mt-0.5 font-mono">
+                            {apiHealth.binance.latency ? `⚡ ${apiHealth.binance.latency}ms latency` : "Endpoint: fapi.binance.com"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      {apiHealth.binance.status === "testing" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Testing
+                        </span>
+                      ) : apiHealth.binance.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" /> Connected
+                        </span>
+                      ) : apiHealth.binance.status === "error" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          Not Tested
+                        </span>
+                      )}
+                    </div>
+
+                    {apiHealth.binance.message && (
+                      <p
+                        className={`text-[11px] leading-relaxed p-2 rounded border ${
+                          apiHealth.binance.status === "success"
+                            ? "bg-emerald-50/50 border-emerald-100 text-emerald-900"
+                            : apiHealth.binance.status === "error"
+                            ? "bg-rose-50/50 border-rose-100 text-rose-900"
+                            : "bg-slate-100/50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {apiHealth.binance.message}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("binance")}
+                        disabled={apiHealth.binance.status === "testing"}
+                        className="px-3 py-1 text-xs font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.binance.status === "testing" && (
+                          <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                        )}
+                        <span>Test Binance API</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Service 2: DeepSeek AI */}
+                  <div className="p-4 rounded-md border border-border bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-md bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-600 font-bold text-xs">
+                          AI
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-textMain">DeepSeek / AI Auditor</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded font-mono bg-indigo-50 text-indigo-700 border border-indigo-100">
+                              {formSettings.deepseek_model || "deepseek-chat"}
+                            </span>
+                          </div>
+                          <p
+                            className="text-[11px] text-textMuted mt-0.5 font-mono truncate max-w-[200px]"
+                            title={formSettings.deepseek_base_url || "https://api.deepseek.com"}
+                          >
+                            {apiHealth.deepseek.latency
+                              ? `⚡ ${apiHealth.deepseek.latency}ms latency`
+                              : (formSettings.deepseek_base_url || "https://api.deepseek.com").replace("https://", "")}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      {apiHealth.deepseek.status === "testing" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Testing
+                        </span>
+                      ) : apiHealth.deepseek.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" /> Connected
+                        </span>
+                      ) : apiHealth.deepseek.status === "error" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          Not Tested
+                        </span>
+                      )}
+                    </div>
+
+                    {apiHealth.deepseek.message && (
+                      <p
+                        className={`text-[11px] leading-relaxed p-2 rounded border ${
+                          apiHealth.deepseek.status === "success"
+                            ? "bg-emerald-50/50 border-emerald-100 text-emerald-900"
+                            : apiHealth.deepseek.status === "error"
+                            ? "bg-rose-50/50 border-rose-100 text-rose-900"
+                            : "bg-slate-100/50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {apiHealth.deepseek.message}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("deepseek")}
+                        disabled={apiHealth.deepseek.status === "testing"}
+                        className="px-3 py-1 text-xs font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.deepseek.status === "testing" && (
+                          <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                        )}
+                        <span>Test AI Endpoint</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Service 3: Telegram */}
+                  <div className="p-4 rounded-md border border-border bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-md bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-600 font-bold text-xs">
+                          TG
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-textMain">Telegram Push Alerts</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                                formSettings.telegram_notifications ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {formSettings.telegram_notifications ? "Alerts Active" : "Alerts Muted"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-textMuted mt-0.5 font-mono">
+                            {apiHealth.telegram.latency
+                              ? `⚡ ${apiHealth.telegram.latency}ms latency`
+                              : formSettings.telegram_chat_id_override
+                              ? `Chat: ${formSettings.telegram_chat_id_override}`
+                              : "No Chat ID set"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      {apiHealth.telegram.status === "testing" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Testing
+                        </span>
+                      ) : apiHealth.telegram.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" /> Connected
+                        </span>
+                      ) : apiHealth.telegram.status === "error" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          Not Tested
+                        </span>
+                      )}
+                    </div>
+
+                    {apiHealth.telegram.message && (
+                      <p
+                        className={`text-[11px] leading-relaxed p-2 rounded border ${
+                          apiHealth.telegram.status === "success"
+                            ? "bg-emerald-50/50 border-emerald-100 text-emerald-900"
+                            : apiHealth.telegram.status === "error"
+                            ? "bg-rose-50/50 border-rose-100 text-rose-900"
+                            : "bg-slate-100/50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {apiHealth.telegram.message}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("telegram")}
+                        disabled={apiHealth.telegram.status === "testing"}
+                        className="px-3 py-1 text-xs font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.telegram.status === "testing" && (
+                          <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                        )}
+                        <Send className="h-3 w-3 text-sky-600" />
+                        <span>Send Test Alert</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Service 4: PostgreSQL Database */}
+                  <div className="p-4 rounded-md border border-border bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-bold text-xs">
+                          DB
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-textMain">Supabase PostgreSQL Ledger</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded font-semibold bg-emerald-100 text-emerald-800">
+                              Realtime Active
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-textMuted mt-0.5 font-mono">
+                            {apiHealth.database.latency ? `⚡ ${apiHealth.database.latency}ms latency` : "State & Telemetry"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      {apiHealth.database.status === "testing" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Testing
+                        </span>
+                      ) : apiHealth.database.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" /> Connected
+                        </span>
+                      ) : apiHealth.database.status === "error" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          Not Tested
+                        </span>
+                      )}
+                    </div>
+
+                    {apiHealth.database.message && (
+                      <p
+                        className={`text-[11px] leading-relaxed p-2 rounded border ${
+                          apiHealth.database.status === "success"
+                            ? "bg-emerald-50/50 border-emerald-100 text-emerald-900"
+                            : apiHealth.database.status === "error"
+                            ? "bg-rose-50/50 border-rose-100 text-rose-900"
+                            : "bg-slate-100/50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {apiHealth.database.message}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("database")}
+                        disabled={apiHealth.database.status === "testing"}
+                        className="px-3 py-1 text-xs font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.database.status === "testing" && (
+                          <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                        )}
+                        <Server className="h-3 w-3 text-emerald-600" />
+                        <span>Verify Database</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Guardrails Card */}
               <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
                 <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
@@ -2438,49 +2925,266 @@ export default function CommandCenterPage() {
                       Standard: <code>deepseek-chat</code>. For OpenRouter: <code>deepseek/deepseek-chat</code> or <code>deepseek/deepseek-r1</code>.
                     </span>
                   </div>
+
+                  <div className="flex justify-end pt-2 border-t border-border">
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("deepseek")}
+                      disabled={apiHealth.deepseek.status === "testing"}
+                      className="px-3.5 py-1.5 text-xs font-semibold rounded-md border border-brand-500 bg-brand-50 hover:bg-brand-100 text-brand-700 flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.deepseek.status === "testing" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-600" />
+                      ) : (
+                        <Cpu className="h-3.5 w-3.5 text-brand-600" />
+                      )}
+                      <span>Test AI Endpoint Connection</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* Encrypted API Keys */}
-              <div className="bg-surface border border-border rounded-lg p-6 space-y-4">
-                <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
-                  <span>Encrypted API Key Overrides</span>
-                </h3>
-                <p className="text-xs text-textMuted">
-                  Leave empty to fallback to container environment variables. Values entered here take immediate precedence.
-                </p>
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                <div>
+                  <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    <span>Encrypted API Key Overrides</span>
+                  </h3>
+                  <p className="text-xs text-textMuted mt-0.5">
+                    Leave empty to fallback to container environment variables. Values entered here take immediate precedence.
+                  </p>
+                </div>
 
-                {[
-                  { key: "binance_api_key_override", label: "Binance Futures API Key" },
-                  { key: "binance_secret_override", label: "Binance Futures Secret" },
-                  { key: "deepseek_key_override", label: "DeepSeek AI API Key" },
-                  { key: "telegram_token_override", label: "Telegram Bot Token" },
-                  { key: "telegram_chat_id_override", label: "Telegram Chat ID" },
-                ].map(({ key, label }) => {
-                  const isVisible = showSecretKeys[key];
-                  return (
-                    <div key={key}>
-                      <label className="block text-xs font-medium text-textMain mb-1">{label}</label>
+                {/* Sub-Group 1: Binance Credentials */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                      <span>Binance Futures API Credentials</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("binance")}
+                      disabled={apiHealth.binance.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.binance.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Check className="h-3 w-3 text-amber-600" />
+                      )}
+                      <span>Test Binance</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Binance Futures API Key</label>
                       <div className="relative">
                         <input
-                          type={isVisible ? "text" : "password"}
-                          value={(formSettings as any)[key] || ""}
-                          onChange={(e) => setFormSettings({ ...formSettings, [key]: e.target.value })}
+                          type={showSecretKeys["binance_api_key_override"] ? "text" : "password"}
+                          value={formSettings.binance_api_key_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, binance_api_key_override: e.target.value })
+                          }
                           placeholder="••••••••••••••••"
-                          className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                         />
                         <button
                           type="button"
-                          onClick={() => setShowSecretKeys({ ...showSecretKeys, [key]: !isVisible })}
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              binance_api_key_override: !showSecretKeys["binance_api_key_override"],
+                            })
+                          }
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                         >
-                          {isVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          {showSecretKeys["binance_api_key_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
                         </button>
                       </div>
                     </div>
-                  );
-                })}
+
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Binance Futures Secret</label>
+                      <div className="relative">
+                        <input
+                          type={showSecretKeys["binance_secret_override"] ? "text" : "password"}
+                          value={formSettings.binance_secret_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, binance_secret_override: e.target.value })
+                          }
+                          placeholder="••••••••••••••••"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              binance_secret_override: !showSecretKeys["binance_secret_override"],
+                            })
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showSecretKeys["binance_secret_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub-Group 2: DeepSeek AI Credentials */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                      <span>DeepSeek / AI Model API Key</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("deepseek")}
+                      disabled={apiHealth.deepseek.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.deepseek.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Check className="h-3 w-3 text-indigo-600" />
+                      )}
+                      <span>Test AI Key</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-textMain mb-1">
+                      DeepSeek, OpenRouter, or BeatAPI Key
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showSecretKeys["deepseek_key_override"] ? "text" : "password"}
+                        value={formSettings.deepseek_key_override || ""}
+                        onChange={(e) =>
+                          setFormSettings({ ...formSettings, deepseek_key_override: e.target.value })
+                        }
+                        placeholder="sk-••••••••••••••••"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowSecretKeys({
+                            ...showSecretKeys,
+                            deepseek_key_override: !showSecretKeys["deepseek_key_override"],
+                          })
+                        }
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showSecretKeys["deepseek_key_override"] ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub-Group 3: Telegram Alert Credentials */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-sky-500"></span>
+                      <span>Telegram Bot Token &amp; Chat ID</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("telegram")}
+                      disabled={apiHealth.telegram.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.telegram.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Send className="h-3 w-3 text-sky-600" />
+                      )}
+                      <span>Test Alert Push</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Telegram Bot Token</label>
+                      <div className="relative">
+                        <input
+                          type={showSecretKeys["telegram_token_override"] ? "text" : "password"}
+                          value={formSettings.telegram_token_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, telegram_token_override: e.target.value })
+                          }
+                          placeholder="123456789:ABCdefGHIjkl..."
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              telegram_token_override: !showSecretKeys["telegram_token_override"],
+                            })
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showSecretKeys["telegram_token_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Telegram Chat ID</label>
+                      <div className="relative">
+                        <input
+                          type={showSecretKeys["telegram_chat_id_override"] ? "text" : "password"}
+                          value={formSettings.telegram_chat_id_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, telegram_chat_id_override: e.target.value })
+                          }
+                          placeholder="987654321"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              telegram_chat_id_override: !showSecretKeys["telegram_chat_id_override"],
+                            })
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showSecretKeys["telegram_chat_id_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Submit Button */}
