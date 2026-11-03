@@ -260,6 +260,7 @@ export default function CommandCenterPage() {
   const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastNotification, setToastNotification] = useState<{
     message: string;
     type: "success" | "error" | "info";
@@ -1151,19 +1152,40 @@ export default function CommandCenterPage() {
         </div>
       )}
 
+      {/* Mobile Drawer Backdrop Overlay */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs lg:hidden transition-opacity duration-300"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
       {/* ========================================================================= */}
-      {/* SIDEBAR */}
+      {/* SIDEBAR (Responsive Sliding Drawer on Mobile / Fixed on Desktop) */}
       {/* ========================================================================= */}
-      <aside className="w-64 bg-surface border-r border-border flex flex-col h-full shrink-0 z-20">
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-72 bg-surface border-r border-border flex flex-col h-full shrink-0 shadow-2xl lg:shadow-none transition-transform duration-300 ease-in-out lg:static lg:w-64 lg:translate-x-0 ${
+          mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         {/* Logo Area */}
-        <div className="h-16 flex items-center px-6 border-b border-border">
-          <div className="w-8 h-8 bg-brand-900 rounded flex items-center justify-center mr-3">
-            <Activity className="text-white w-5 h-5" />
+        <div className="h-16 flex items-center justify-between px-6 border-b border-border">
+          <div className="flex items-center">
+            <div className="w-8 h-8 bg-brand-900 rounded flex items-center justify-center mr-3">
+              <Activity className="text-white w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="font-bold text-sm tracking-wide leading-tight">alifcrptoai</h1>
+              <span className="text-[10px] text-textMuted font-medium uppercase tracking-wider">By Alifu Haji</span>
+            </div>
           </div>
-          <div>
-            <h1 className="font-bold text-sm tracking-wide leading-tight">alifcrptoai</h1>
-            <span className="text-[10px] text-textMuted font-medium uppercase tracking-wider">By Alifu Haji</span>
-          </div>
+          <button
+            onClick={() => setMobileMenuOpen(false)}
+            className="p-1.5 text-textMuted hover:text-textMain rounded-lg lg:hidden hover:bg-slate-100 transition-colors cursor-pointer"
+            aria-label="Close Navigation"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Navigation */}
@@ -1173,7 +1195,10 @@ export default function CommandCenterPage() {
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
             {/* 1. Overview & KPIs (Default Home Dashboard) */}
             <button
-              onClick={() => setActiveSection("overview")}
+              onClick={() => {
+                setActiveSection("overview");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "overview"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1186,7 +1211,10 @@ export default function CommandCenterPage() {
 
             {/* 2. Live Execution Chart */}
             <button
-              onClick={() => setActiveSection("chart")}
+              onClick={() => {
+                setActiveSection("chart");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "chart"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1206,7 +1234,10 @@ export default function CommandCenterPage() {
 
             {/* 3. Live Positions */}
             <button
-              onClick={() => setActiveSection("positions")}
+              onClick={() => {
+                setActiveSection("positions");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "positions"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1226,7 +1257,10 @@ export default function CommandCenterPage() {
 
             {/* 4. Trading Journal */}
             <button
-              onClick={() => setActiveSection("journal")}
+              onClick={() => {
+                setActiveSection("journal");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "journal"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1239,7 +1273,10 @@ export default function CommandCenterPage() {
 
             {/* 5. Strategy Analytics */}
             <button
-              onClick={() => setActiveSection("strategies")}
+              onClick={() => {
+                setActiveSection("strategies");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "strategies"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1255,7 +1292,10 @@ export default function CommandCenterPage() {
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
             <button
-              onClick={() => setActiveSection("news")}
+              onClick={() => {
+                setActiveSection("news");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "news"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1276,7 +1316,10 @@ export default function CommandCenterPage() {
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
             <button
-              onClick={() => setActiveSection("audits")}
+              onClick={() => {
+                setActiveSection("audits");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "audits"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1291,7 +1334,10 @@ export default function CommandCenterPage() {
             </button>
 
             <button
-              onClick={() => setActiveSection("autopsies")}
+              onClick={() => {
+                setActiveSection("autopsies");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "autopsies"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1314,7 +1360,10 @@ export default function CommandCenterPage() {
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
             <button
-              onClick={() => setActiveSection("settings")}
+              onClick={() => {
+                setActiveSection("settings");
+                setMobileMenuOpen(false);
+              }}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "settings"
                   ? "bg-brand-50 text-brand-600 font-semibold"
@@ -1342,7 +1391,10 @@ export default function CommandCenterPage() {
               </div>
             </div>
             <button
-              onClick={() => supabase.auth.signOut().then(() => router.push("/login"))}
+              onClick={() => {
+                setMobileMenuOpen(false);
+                supabase.auth.signOut().then(() => router.push("/login"));
+              }}
               className="text-textMuted hover:text-textMain p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
               title="Sign Out"
             >
@@ -1357,13 +1409,22 @@ export default function CommandCenterPage() {
       {/* ========================================================================= */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* TOP HEADER */}
-        <header className="h-16 bg-surface border-b border-border flex items-center justify-between px-6 shrink-0">
-          <div className="flex items-center space-x-2 text-sm text-textMuted">
-            <span>DESK</span>
-            <ChevronRight className="w-3 h-3" />
-            <span className="font-medium text-textMain capitalize">
+        <header className="h-16 bg-surface border-b border-border flex items-center justify-between px-3 sm:px-6 shrink-0">
+          <div className="flex items-center space-x-2 text-sm text-textMuted min-w-0">
+            {/* Mobile Hamburger Toggle Button */}
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="p-1.5 -ml-1 mr-1 text-textMuted hover:text-textMain rounded-lg lg:hidden hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+              aria-label="Open Navigation"
+            >
+              <Menu className="w-5 h-5 text-slate-700" />
+            </button>
+
+            <span className="hidden sm:inline">DESK</span>
+            <ChevronRight className="w-3 h-3 hidden sm:inline" />
+            <span className="font-semibold text-textMain capitalize truncate text-xs sm:text-sm">
               {activeSection === "chart" && "Live Execution Chart & Positions"}
-              {activeSection === "journal" && "Institutional Trading Journal & Analytics"}
+              {activeSection === "journal" && "Trading Journal & Analytics"}
               {activeSection === "overview" && "Executive Telemetry & Balance"}
               {activeSection === "positions" && "Live Positions"}
               {activeSection === "strategies" && "Strategy Leaderboard"}
@@ -1374,55 +1435,58 @@ export default function CommandCenterPage() {
             </span>
           </div>
 
-          {/* Status Toggles */}
-          <div className="flex items-center space-x-3 text-xs font-medium">
+          {/* Status Toggles & Panic Button */}
+          <div className="flex items-center space-x-1.5 sm:space-x-3 text-xs font-medium shrink-0">
             <button
               onClick={toggleBotActive}
-              className={`flex items-center px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
+              className={`flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer text-xs ${
                 config?.is_active
                   ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                   : "bg-amber-50 border-amber-200 text-amber-700"
               }`}
             >
               {config?.is_active ? (
-                <PlayCircle className="w-3.5 h-3.5 mr-1.5" />
+                <PlayCircle className="w-3.5 h-3.5 sm:mr-1.5" />
               ) : (
-                <PauseCircle className="w-3.5 h-3.5 mr-1.5" />
+                <PauseCircle className="w-3.5 h-3.5 sm:mr-1.5" />
               )}
-              <span>{config?.is_active ? "RUNNING" : "PAUSED"}</span>
+              <span className="hidden sm:inline">{config?.is_active ? "RUNNING" : "PAUSED"}</span>
             </button>
 
             <button
               onClick={toggleSandboxMode}
-              className={`flex items-center px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
+              className={`flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer text-xs ${
                 config?.sandbox_mode
                   ? "bg-blue-50 border-blue-200 text-blue-700"
                   : "bg-rose-50 border-rose-200 text-rose-700"
               }`}
             >
-              <Radio className="w-3.5 h-3.5 mr-1.5" />
-              <span>{config?.sandbox_mode ? "TESTNET / DEMO" : "LIVE BINANCE"}</span>
+              <Radio className="w-3.5 h-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">{config?.sandbox_mode ? "TESTNET / DEMO" : "LIVE BINANCE"}</span>
+              <span className="sm:hidden">{config?.sandbox_mode ? "DEMO" : "LIVE"}</span>
             </button>
 
-            <div className="hidden sm:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md">
+            <div className="hidden lg:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md">
               <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-500" /> NORMAL
             </div>
 
-            <div className="hidden md:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md tabular-nums">
+            <div className="hidden xl:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md tabular-nums">
               <Gauge className="w-3.5 h-3.5 mr-1.5 text-brand-500" /> {calculatedExposure.current}% / {calculatedExposure.max}%
             </div>
 
             <button
               onClick={() => setShowPanicModal(true)}
-              className="flex items-center px-3 py-1.5 border border-rose-600 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+              className="flex items-center px-2 sm:px-3 py-1.5 border border-rose-600 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer text-xs font-bold"
             >
-              <AlertOctagon className="w-3.5 h-3.5 mr-1.5" /> PANIC CLOSE
+              <AlertOctagon className="w-3.5 h-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">PANIC CLOSE</span>
+              <span className="sm:hidden">PANIC</span>
             </button>
           </div>
         </header>
 
         {/* SCROLLABLE DASHBOARD AREA */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 lg:p-6 space-y-4 sm:space-y-6">
           {/* ========================================================================= */}
           {/* TAB 1: EXECUTIVE OVERVIEW */}
           {/* ========================================================================= */}
@@ -1433,7 +1497,7 @@ export default function CommandCenterPage() {
               </div>
 
               {/* KPI CARDS GRID */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {/* Card 1 */}
                 <div className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between">
                   <div className="flex justify-between items-start mb-4">
@@ -1848,7 +1912,7 @@ export default function CommandCenterPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto bg-surface border border-border rounded-lg">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full text-left text-xs min-w-[700px]">
                     <thead className="border-b border-border bg-slate-50 text-textMuted uppercase font-semibold text-[10px] tracking-wider">
                       <tr>
                         <th className="py-3 px-4">Symbol / Strategy</th>
@@ -2037,7 +2101,7 @@ export default function CommandCenterPage() {
 
               {/* Leaderboard Table */}
               <div className="overflow-x-auto bg-surface border border-border rounded-lg">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[720px]">
                   <thead className="border-b border-border bg-slate-50 text-textMuted uppercase font-semibold text-[10px] tracking-wider">
                     <tr>
                       <th className="py-3 px-4">Strategy Plugin</th>

@@ -666,20 +666,20 @@ export default function LiveTradeChart({
   return (
     <div className="bg-[#0B0E14] border border-border/70 rounded-xl overflow-hidden shadow-2xl transition-all">
       {/* ========================================================================= */}
-      {/* 1. TOP CONTROL BAR */}
+      {/* 1. TOP CONTROL BAR (Fully Responsive for Mobile & Desktop) */}
       {/* ========================================================================= */}
-      <div className="flex flex-wrap items-center justify-between px-5 py-3.5 border-b border-border/60 bg-[#0d121c]/90 backdrop-blur-md gap-4">
-        {/* Left: Symbol Selector & Live Ticker */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Symbol Selector */}
-          <div className="flex items-center space-x-1.5 bg-slate-900/90 p-1 rounded-lg border border-border/70">
+      <div className="flex flex-wrap items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3.5 border-b border-border/60 bg-[#0d121c]/90 backdrop-blur-md gap-2 sm:gap-4">
+        {/* Left: Symbol Selector, Timeframe & Live Ticker */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 max-w-full">
+          {/* Symbol Selector (Touch-friendly scroll on narrow screens) */}
+          <div className="flex items-center space-x-1 sm:space-x-1.5 bg-slate-900/90 p-1 rounded-lg border border-border/70 overflow-x-auto max-w-full pb-0.5 no-scrollbar">
             {availableSymbols.map((sym) => {
               const isOpen = openTrades.some((t) => t.status === "OPEN" && t.symbol === sym);
               return (
                 <button
                   key={sym}
                   onClick={() => setSelectedSymbol(sym)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center space-x-1.5 ${
+                  className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs font-semibold rounded-md transition-all flex items-center space-x-1.5 whitespace-nowrap cursor-pointer ${
                     selectedSymbol === sym
                       ? "bg-brand-600 text-white shadow-sm font-bold"
                       : "text-slate-400 hover:text-white hover:bg-slate-800"
@@ -695,12 +695,12 @@ export default function LiveTradeChart({
           </div>
 
           {/* Timeframe Selector */}
-          <div className="flex items-center space-x-1 bg-slate-900/90 p-1 rounded-lg border border-border/70">
+          <div className="flex items-center space-x-0.5 sm:space-x-1 bg-slate-900/90 p-1 rounded-lg border border-border/70 overflow-x-auto max-w-full pb-0.5 no-scrollbar">
             {TIMEFRAMES.map((tf) => (
               <button
                 key={tf.value}
                 onClick={() => setTimeframe(tf.value)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
+                className={`px-2 sm:px-2.5 py-1 text-xs font-medium rounded-md transition-all cursor-pointer ${
                   timeframe === tf.value
                     ? "bg-slate-700 text-white font-bold"
                     : "text-slate-400 hover:text-white"
@@ -712,13 +712,13 @@ export default function LiveTradeChart({
           </div>
 
           {/* Live Price & 24h Ticker */}
-          <div className="flex items-center space-x-2.5 px-3 py-1 bg-slate-900/60 border border-slate-800 rounded-lg tabular-nums">
-            <span className="text-sm font-bold text-white tracking-tight">
+          <div className="flex items-center space-x-2 px-2.5 sm:px-3 py-1 bg-slate-900/60 border border-slate-800 rounded-lg tabular-nums">
+            <span className="text-xs sm:text-sm font-bold text-white tracking-tight">
               ${formatPrice(currentPrice)}
             </span>
             {priceChange24h !== null && (
               <span
-                className={`text-xs font-semibold flex items-center ${
+                className={`text-[11px] sm:text-xs font-semibold flex items-center ${
                   priceChange24h >= 0 ? "text-emerald-400" : "text-rose-400"
                 }`}
               >
@@ -726,7 +726,7 @@ export default function LiveTradeChart({
                 {priceChange24h.toFixed(2)}%
               </span>
             )}
-            <div className="flex items-center space-x-1 text-[11px] text-slate-400 border-l border-slate-800 pl-2">
+            <div className="hidden sm:flex items-center space-x-1 text-[11px] text-slate-400 border-l border-slate-800 pl-2">
               <span
                 className={`w-2 h-2 rounded-full ${
                   isWsConnected ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
@@ -737,11 +737,11 @@ export default function LiveTradeChart({
           </div>
         </div>
 
-        {/* Right: Mode Switcher & Replay Status */}
-        <div className="flex items-center space-x-3">
+        {/* Right: Mode Switcher & Sizing Controls */}
+        <div className="flex items-center space-x-1.5 sm:space-x-3 shrink-0">
           {/* Active Positions Indicator Badge */}
           {activeSymbolTrades.length > 0 && (
-            <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 bg-cyan-950/60 border border-cyan-800/60 rounded-md text-cyan-300 text-xs font-medium">
+            <div className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 bg-cyan-950/60 border border-cyan-800/60 rounded-md text-cyan-300 text-xs font-medium">
               <Radio className="w-3.5 h-3.5 animate-pulse text-cyan-400" />
               <span>{activeSymbolTrades.length} Active Position(s) Plotted</span>
             </div>
@@ -751,25 +751,27 @@ export default function LiveTradeChart({
           <div className="flex items-center bg-slate-900 p-1 rounded-lg border border-border/80">
             <button
               onClick={() => setViewMode("bot")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center space-x-1.5 ${
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs font-medium rounded-md transition-all flex items-center space-x-1 sm:space-x-1.5 cursor-pointer ${
                 viewMode === "bot"
                   ? "bg-brand-600 text-white font-bold shadow"
                   : "text-slate-400 hover:text-white"
               }`}
             >
-              <Activity className="w-3.5 h-3.5" />
-              <span>Bot Execution Canvas</span>
+              <Activity className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Bot Execution Canvas</span>
+              <span className="sm:hidden">Canvas</span>
             </button>
             <button
               onClick={() => setViewMode("tradingview")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center space-x-1.5 ${
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs font-medium rounded-md transition-all flex items-center space-x-1 sm:space-x-1.5 cursor-pointer ${
                 viewMode === "tradingview"
                   ? "bg-slate-700 text-white font-bold shadow"
                   : "text-slate-400 hover:text-white"
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>TradingView Studio</span>
+              <Layers className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">TradingView Studio</span>
+              <span className="sm:hidden">TradingView</span>
             </button>
           </div>
 
@@ -782,11 +784,11 @@ export default function LiveTradeChart({
             <RefreshCw className={`w-4 h-4 ${isLoadingCandles ? "animate-spin" : ""}`} />
           </button>
 
-          {/* Sizing Toggle: Mid-Sized (340px) vs Expanded (500px) */}
+          {/* Sizing Toggle: Mid-Sized vs Expanded */}
           <button
             onClick={() => setIsExpanded((prev) => !prev)}
-            className="px-2.5 py-1.5 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-lg border border-border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-medium"
-            title={isExpanded ? "Collapse to Mid-Sized View (340px)" : "Expand to Full Height (500px)"}
+            className="px-2 sm:px-2.5 py-1.5 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-lg border border-border transition-colors cursor-pointer flex items-center gap-1 sm:gap-1.5 text-xs font-medium"
+            title={isExpanded ? "Collapse to Mid-Sized View" : "Expand to Full Height"}
           >
             {isExpanded ? <Minimize2 className="w-3.5 h-3.5 text-cyan-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
             <span className="hidden sm:inline">{isExpanded ? "Mid" : "Expand"}</span>
@@ -798,34 +800,33 @@ export default function LiveTradeChart({
       {/* 2. REPLAY & ACTIVE FOCUS NOTIFICATION BANNER */}
       {/* ========================================================================= */}
       {focusedTrade && (
-        <div className="flex items-center justify-between px-5 py-2.5 bg-gradient-to-r from-blue-950/90 via-slate-900/90 to-purple-950/90 border-b border-blue-800/50 text-xs">
-          <div className="flex items-center space-x-2.5">
-            <Eye className="w-4 h-4 text-cyan-400" />
-            <span className="font-semibold text-cyan-300">
-              Journal Replay Mode:
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-r from-blue-950/90 via-slate-900/90 to-purple-950/90 border-b border-blue-800/50 text-xs gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5">
+            <div className="flex items-center space-x-1.5">
+              <Eye className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="font-semibold text-cyan-300">Journal Replay:</span>
+            </div>
+            <span className="text-white font-medium">
+              #{focusedTrade.id} ({focusedTrade.symbol} - {focusedTrade.side})
             </span>
-            <span className="text-white">
-              Inspecting Trade #{focusedTrade.id} ({focusedTrade.symbol} - {focusedTrade.side} by{" "}
-              {focusedTrade.strategy_name})
-            </span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+            <span className="px-1.5 sm:px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[11px]">
               Entry: ${formatPrice(focusedTrade.entry_price)}
             </span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+            <span className="px-1.5 sm:px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[11px]">
               SL: ${formatPrice(focusedTrade.stop_loss)}
             </span>
-            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+            <span className="px-1.5 sm:px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[11px]">
               TP: ${formatPrice(focusedTrade.take_profit)}
             </span>
             {focusedTrade.pnl_r !== undefined && focusedTrade.pnl_r !== null && (
               <span
-                className={`px-2 py-0.5 rounded font-bold ${
+                className={`px-1.5 sm:px-2 py-0.5 rounded font-bold text-[11px] ${
                   Number(focusedTrade.pnl_r) >= 0
                     ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
                     : "bg-rose-950 text-rose-400 border border-rose-800"
                 }`}
               >
-                Outcome: {Number(focusedTrade.pnl_r) >= 0 ? "+" : ""}
+                {Number(focusedTrade.pnl_r) >= 0 ? "+" : ""}
                 {Number(focusedTrade.pnl_r).toFixed(2)}R
               </span>
             )}
@@ -834,7 +835,7 @@ export default function LiveTradeChart({
           {onClearFocus && (
             <button
               onClick={onClearFocus}
-              className="flex items-center space-x-1 px-2.5 py-1 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition cursor-pointer"
+              className="flex items-center space-x-1 px-2.5 py-1 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition cursor-pointer self-end sm:self-center"
             >
               <X className="w-3.5 h-3.5" />
               <span>Clear Replay</span>
@@ -846,7 +847,7 @@ export default function LiveTradeChart({
       {/* ========================================================================= */}
       {/* 3. CHART CANVAS CONTAINER */}
       {/* ========================================================================= */}
-      <div className={`relative w-full transition-all duration-200 ${isExpanded ? "h-[500px]" : "h-[340px]"}`}>
+      <div className={`relative w-full transition-all duration-200 ${isExpanded ? "h-[450px] sm:h-[500px]" : "h-[300px] sm:h-[340px]"}`}>
         {/* Mode A: Lightweight-charts Container */}
         <div
           ref={chartContainerRef}

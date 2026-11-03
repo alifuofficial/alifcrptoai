@@ -467,7 +467,7 @@ export default function TradingJournal({
       {/* ========================================================================= */}
       {/* 1. JOURNAL ANALYTICS SUMMARY BAR (TOP 5 INSTITUTIONAL KPIS) */}
       {/* ========================================================================= */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* KPI 1: Cumulative Net P&L */}
         <div className="bg-surface border border-border rounded-xl p-4 flex flex-col justify-between shadow-sm">
           <div className="flex items-center justify-between text-xs text-textMuted font-semibold uppercase tracking-wider mb-2">
@@ -583,17 +583,17 @@ export default function TradingJournal({
       {/* ========================================================================= */}
       {/* 2. MULTI-DIMENSIONAL FILTER & CSV EXPORT BAR */}
       {/* ========================================================================= */}
-      <div className="bg-surface border border-border rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="bg-surface border border-border rounded-xl p-3 sm:p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-xs">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full md:w-auto">
           {/* Search Box */}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" />
             <input
               type="text"
-              placeholder="Search symbol, strategy, notes..."
+              placeholder="Search symbol, notes..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-brand-500 w-56"
+              className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-brand-500 w-full sm:w-52"
             />
           </div>
 
@@ -601,7 +601,7 @@ export default function TradingJournal({
           <select
             value={symbolFilter}
             onChange={(e) => setSymbolFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
           >
             <option value="ALL">All Symbols</option>
             <option value="BTC/USDT">BTC/USDT</option>
@@ -613,7 +613,7 @@ export default function TradingJournal({
           <select
             value={strategyFilter}
             onChange={(e) => setStrategyFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
           >
             {ALL_STRATEGIES.map((s) => (
               <option key={s} value={s}>
@@ -626,7 +626,7 @@ export default function TradingJournal({
           <select
             value={outcomeFilter}
             onChange={(e) => setOutcomeFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
           >
             <option value="ALL">All Outcomes</option>
             <option value="WINS ONLY">Wins Only (&gt; 0R)</option>
@@ -639,7 +639,7 @@ export default function TradingJournal({
           <select
             value={sessionFilter}
             onChange={(e) => setSessionFilter(e.target.value)}
-            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
           >
             <option value="ALL">All Sessions</option>
             <option value="Asian">Asian Session (00-08 UTC)</option>
@@ -649,7 +649,7 @@ export default function TradingJournal({
         </div>
 
         {/* Right Action: CSV Export & Refresh */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 self-end md:self-auto shrink-0">
           <button
             onClick={() => fetchJournalTrades()}
             disabled={isLoading}
@@ -674,7 +674,7 @@ export default function TradingJournal({
       {/* ========================================================================= */}
       <div className="bg-surface border border-border rounded-xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+          <table className="w-full text-left text-xs border-collapse min-w-[780px]">
             <thead>
               <tr className="border-b border-border bg-slate-50/70 text-textMuted font-bold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-4">Time (UTC)</th>
@@ -846,11 +846,11 @@ export default function TradingJournal({
       {/* 4. EXPANDABLE TRADE INSPECTOR MODAL (3-COLUMN INSTITUTIONAL AUDIT) */}
       {/* ========================================================================= */}
       {inspectTrade && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-surface border border-border rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-surface border border-border rounded-xl sm:rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-slate-50/80">
-              <div className="flex items-center space-x-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border bg-slate-50/80 gap-3">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <span
                   className={`px-2.5 py-1 rounded-md text-xs font-extrabold ${
                     inspectTrade.side === "LONG"
@@ -860,15 +860,15 @@ export default function TradingJournal({
                 >
                   {inspectTrade.side}
                 </span>
-                <h3 className="text-base font-bold text-textMain">
+                <h3 className="text-sm sm:text-base font-bold text-textMain">
                   Trade #{inspectTrade.id} — {inspectTrade.symbol} ({inspectTrade.strategy_name?.replace(/_/g, " ")})
                 </h3>
-                <span className="text-xs text-textMuted font-mono">
+                <span className="text-[11px] sm:text-xs text-textMuted font-mono">
                   {new Date(inspectTrade.opened_at).toUTCString()}
                 </span>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 self-end sm:self-auto shrink-0">
                 {onReplayTrade && (
                   <button
                     onClick={() => {
@@ -891,7 +891,7 @@ export default function TradingJournal({
             </div>
 
             {/* Modal Body: 3-Column Layout */}
-            <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 divide-y lg:divide-y-0 lg:divide-x divide-border">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 divide-y lg:divide-y-0 lg:divide-x divide-border">
               {/* --------------------------------------------------------------- */}
               {/* COLUMN 1: WHAT THE AI SAW AT ENTRY */}
               {/* --------------------------------------------------------------- */}
