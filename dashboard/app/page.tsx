@@ -72,7 +72,12 @@ import {
   Wifi,
   WifiOff,
   Check,
+  BookOpen,
+  LineChart,
 } from "lucide-react";
+
+import LiveTradeChart from "./components/LiveTradeChart";
+import TradingJournal from "./components/TradingJournal";
 
 // --- TYPES ---
 interface BotConfig {
@@ -220,7 +225,16 @@ const ALL_STRATEGIES: StrategyInfo[] = [
   { id: "RSI_Divergence_Reversal", label: "RSI Divergence Reversal", regime: "Mean Reversion" },
 ];
 
-type NavSection = "overview" | "positions" | "strategies" | "news" | "audits" | "autopsies" | "settings";
+type NavSection =
+  | "chart"
+  | "journal"
+  | "strategies"
+  | "autopsies"
+  | "settings"
+  | "overview"
+  | "positions"
+  | "news"
+  | "audits";
 
 export default function CommandCenterPage() {
   const router = useRouter();
@@ -235,12 +249,14 @@ export default function CommandCenterPage() {
   const [snapshotsHistory, setSnapshotsHistory] = useState<AccountSnapshot[]>([]);
   const [perfView, setPerfView] = useState<StrategyPerformance[]>([]);
   const [openTrades, setOpenTrades] = useState<TradeExecution[]>([]);
+  const [closedTrades, setClosedTrades] = useState<TradeExecution[]>([]);
+  const [focusedTrade, setFocusedTrade] = useState<any | null>(null);
   const [recentAudits, setRecentAudits] = useState<AiAuditLog[]>([]);
   const [lessons, setLessons] = useState<BotLesson[]>([]);
   const [autopsies, setAutopsies] = useState<TradeAutopsy[]>([]);
 
   // UI States
-  const [activeSection, setActiveSection] = useState<NavSection>("overview");
+  const [activeSection, setActiveSection] = useState<NavSection>("chart");
   const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -341,6 +357,15 @@ export default function CommandCenterPage() {
         .eq("status", "OPEN")
         .order("opened_at", { ascending: false });
       if (tradeData) setOpenTrades(tradeData);
+
+      // Closed Trades for Historical Candle Markers & Replay
+      const { data: closedData } = await supabase
+        .from("trade_executions")
+        .select("*")
+        .neq("status", "OPEN")
+        .order("closed_at", { ascending: false })
+        .limit(50);
+      if (closedData) setClosedTrades(closedData);
 
       // Recent AI Audits
       const { data: auditData } = await supabase
@@ -1143,103 +1168,71 @@ export default function CommandCenterPage() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
-          {/* Section 1: Trading Desk */}
+          {/* Section 1: Institutional Trading Desk */}
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
+            {/* Tab 1: Live Execution Chart & Positions */}
             <button
-              onClick={() => setActiveSection("overview")}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "overview"
-                  ? "bg-brand-50 text-brand-600"
-                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4 mr-3" />
-              <span>Overview &amp; KPIs</span>
-            </button>
-
-            <button
-              onClick={() => setActiveSection("positions")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
-                activeSection === "positions"
-                  ? "bg-brand-50 text-brand-600"
+              onClick={() => setActiveSection("chart")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "chart" || activeSection === "positions"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <Layers className="w-4 h-4 mr-3" />
-                <span>Live Positions</span>
+                <LineChart className="w-4 h-4 mr-3 text-cyan-600" />
+                <span>Live Execution Chart</span>
               </div>
               {openTrades.length > 0 && (
-                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
-                  {openTrades.length}
+                <span className="bg-cyan-100 text-cyan-800 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                  {openTrades.length} Active
                 </span>
               )}
             </button>
 
+            {/* Tab 2: Trading Journal & Analytics */}
+            <button
+              onClick={() => setActiveSection("journal")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "journal"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <BookOpen className="w-4 h-4 mr-3 text-purple-600" />
+              <span>Trading Journal</span>
+            </button>
+
+            {/* Tab 3: Strategy Performance Leaderboard */}
             <button
               onClick={() => setActiveSection("strategies")}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
                 activeSection === "strategies"
-                  ? "bg-brand-50 text-brand-600"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <TrendingUp className="w-4 h-4 mr-3" />
-              <span>Strategy Analytics</span>
+              <Layers className="w-4 h-4 mr-3 text-brand-600" />
+              <span>Strategy Leaderboard</span>
             </button>
           </div>
 
-          {/* Section 2: Market Intelligence */}
-          <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
-            <button
-              onClick={() => setActiveSection("news")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "news"
-                  ? "bg-brand-50 text-brand-600"
-                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
-              }`}
-            >
-              <div className="flex items-center">
-                <Newspaper className="w-4 h-4 mr-3" />
-                <span>Market &amp; Macro News</span>
-              </div>
-              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
-                {newsItems.length}
-              </span>
-            </button>
-          </div>
-
-          {/* Section 3: AI Intelligence */}
+          {/* Section 2: AI Intelligence & Self-Learning */}
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
-            <button
-              onClick={() => setActiveSection("audits")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "audits"
-                  ? "bg-brand-50 text-brand-600"
-                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
-              }`}
-            >
-              <div className="flex items-center">
-                <Cpu className="w-4 h-4 mr-3" />
-                <span>DeepSeek Audits</span>
-              </div>
-              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
-            </button>
-
+            {/* Tab 4: AI Self-Improvement & Autopsies */}
             <button
               onClick={() => setActiveSection("autopsies")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "autopsies"
-                  ? "bg-brand-50 text-brand-600"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <BrainCircuit className="w-4 h-4 mr-3" />
-                <span>Self-Learning</span>
+                <BrainCircuit className="w-4 h-4 mr-3 text-emerald-600" />
+                <span>AI Self-Learning</span>
               </div>
               {lessons.filter((l) => l.status === "PENDING").length > 0 && (
                 <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
@@ -1247,20 +1240,69 @@ export default function CommandCenterPage() {
                 </span>
               )}
             </button>
+
+            <button
+              onClick={() => setActiveSection("audits")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "audits"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Cpu className="w-4 h-4 mr-3 text-blue-600" />
+                <span>DeepSeek Audits</span>
+              </div>
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+            </button>
           </div>
 
-          {/* Section 4: Management */}
+          {/* Section 3: Telemetry & Macro News */}
+          <div>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Telemetry &amp; News</p>
+            <button
+              onClick={() => setActiveSection("overview")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "overview"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 mr-3 text-slate-600" />
+              <span>Executive Telemetry</span>
+            </button>
+
+            <button
+              onClick={() => setActiveSection("news")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "news"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Newspaper className="w-4 h-4 mr-3 text-indigo-600" />
+                <span>Macro &amp; Crypto News</span>
+              </div>
+              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                {newsItems.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Section 4: Management & Settings */}
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
+            {/* Tab 5: Risk, Execution & API Settings */}
             <button
               onClick={() => setActiveSection("settings")}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "settings"
-                  ? "bg-brand-50 text-brand-600"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <SlidersHorizontal className="w-4 h-4 mr-3" />
+              <SlidersHorizontal className="w-4 h-4 mr-3 text-slate-700" />
               <span>Risk &amp; Settings</span>
             </button>
           </div>
@@ -1301,12 +1343,14 @@ export default function CommandCenterPage() {
             <span>DESK</span>
             <ChevronRight className="w-3 h-3" />
             <span className="font-medium text-textMain capitalize">
-              {activeSection === "overview" && "Overview"}
+              {activeSection === "chart" && "Live Execution Chart & Positions"}
+              {activeSection === "journal" && "Institutional Trading Journal & Analytics"}
+              {activeSection === "overview" && "Executive Telemetry & Balance"}
               {activeSection === "positions" && "Live Positions"}
-              {activeSection === "strategies" && "Strategy Analytics"}
+              {activeSection === "strategies" && "Strategy Leaderboard"}
               {activeSection === "news" && "Market & Macro News"}
               {activeSection === "audits" && "DeepSeek Audits"}
-              {activeSection === "autopsies" && "Self-Learning"}
+              {activeSection === "autopsies" && "AI Self-Learning & Autopsies"}
               {activeSection === "settings" && "Risk & Settings"}
             </span>
           </div>
@@ -1746,10 +1790,20 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* TAB 2: LIVE POSITIONS DESK */}
+          {/* TAB 1: LIVE EXECUTION CHART & POSITIONS */}
           {/* ========================================================================= */}
-          {activeSection === "positions" && (
+          {(activeSection === "chart" || activeSection === "positions") && (
             <div className="space-y-6">
+              {/* Dual-Mode Live Execution Chart with Historical Entry/Exit Markers */}
+              <LiveTradeChart
+                openTrades={openTrades}
+                closedTrades={closedTrades}
+                focusedTrade={focusedTrade}
+                onClearFocus={() => setFocusedTrade(null)}
+                availableSymbols={config?.symbols || ["BTC/USDT", "ETH/USDT", "SOL/USDT"]}
+              />
+
+              {/* Positions Table Header */}
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-xl font-semibold tracking-tight">Institutional Positions Ledger</h2>
@@ -1841,6 +1895,76 @@ export default function CommandCenterPage() {
                   </table>
                 </div>
               )}
+
+              {/* Live AI Audits Stream inside Tab 1 */}
+              <div className="space-y-3 pt-4 border-t border-border/70">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Cpu className="w-4 h-4 text-blue-600" />
+                    <h3 className="text-sm font-bold text-textMain">Live AI Decision Stream (DeepSeek Conviction Audits)</h3>
+                  </div>
+                  <span className="text-xs text-textMuted">Latest {recentAudits.length} evaluations</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {recentAudits.slice(0, 6).map((audit) => (
+                    <div
+                      key={audit.id}
+                      className="bg-surface border border-border rounded-lg p-3 space-y-2 text-xs shadow-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-textMain">{audit.symbol}</span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            audit.proposed_direction === "LONG"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-rose-50 text-rose-700 border-rose-200"
+                          }`}
+                        >
+                          {audit.proposed_direction}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-textMuted truncate">{audit.strategy_name}</div>
+                      <div className="flex items-center justify-between pt-1 border-t border-border/50">
+                        <span className="text-[11px] font-semibold">
+                          Score:{" "}
+                          <span className={audit.veto_triggered ? "text-rose-600" : "text-emerald-600"}>
+                            {audit.total_score}/100
+                          </span>
+                        </span>
+                        <span className="text-[10px] text-textMuted">
+                          {new Date(audit.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB 2: TRADING JOURNAL & ANALYTICS */}
+          {/* ========================================================================= */}
+          {activeSection === "journal" && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold tracking-tight">Institutional Trading Journal &amp; Analytics</h2>
+                  <p className="text-xs text-textMuted mt-0.5">
+                    Multi-dimensional post-mortem ledger, expectancy calculations, MFE/MAE excursion metrics, and human review
+                  </p>
+                </div>
+              </div>
+
+              <TradingJournal
+                onReplayTrade={(trade) => {
+                  setFocusedTrade(trade);
+                  setActiveSection("chart");
+                  showToast(`Focusing trade #${trade.id} on Live Execution Canvas`, "info");
+                }}
+                showToast={showToast}
+              />
             </div>
           )}
 

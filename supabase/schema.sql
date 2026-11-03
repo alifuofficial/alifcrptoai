@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS trade_executions (
     entry_rvol NUMERIC,
     entry_scores JSONB NOT NULL DEFAULT '{}'::JSONB,
     autopsy_completed BOOLEAN NOT NULL DEFAULT false,
+    trader_notes TEXT NOT NULL DEFAULT '',
+    emotion_or_grade TEXT NOT NULL DEFAULT 'A-Setup',
+    user_rating INT NOT NULL DEFAULT 0 CHECK (user_rating BETWEEN 0 AND 5),
+    fees_usdt NUMERIC NOT NULL DEFAULT 0,
     opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     closed_at TIMESTAMPTZ
 );
@@ -235,7 +239,19 @@ SELECT
 FROM trade_executions
 GROUP BY strategy_name;
 
--- 9. ROW LEVEL SECURITY (RLS) POLICIES
+-- 9. TRADING JOURNAL & ANALYTICS VIEW
+DROP VIEW IF EXISTS trading_journal_view CASCADE;
+CREATE OR REPLACE VIEW trading_journal_view AS
+SELECT 
+    t.*,
+    a.failure_category,
+    a.root_cause_analysis,
+    a.recommended_rule_adjustment
+FROM trade_executions t
+LEFT JOIN trade_autopsies a ON t.id = a.trade_id
+ORDER BY t.opened_at DESC;
+
+-- 10. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE bot_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_audit_logs ENABLE ROW LEVEL SECURITY;
@@ -415,7 +431,24 @@ BEGIN
         'RSI_Divergence_Reversal'
     ]
     WHERE id = 1 AND cardinality(active_strategies) <= 4;
+
+    -- Upgrade trade_executions for Institutional Trading Journal & Execution Suite
+    ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS trader_notes TEXT DEFAULT '';
+    ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS emotion_or_grade TEXT DEFAULT 'A-Setup';
+    ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS user_rating INT DEFAULT 0;
+    ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS fees_usdt NUMERIC DEFAULT 0;
 END $$;
+
+-- 12. ENSURE TRADING JOURNAL VIEW IS CREATED
+CREATE OR REPLACE VIEW trading_journal_view AS
+SELECT 
+    t.*,
+    a.failure_category,
+    a.root_cause_analysis,
+    a.recommended_rule_adjustment
+FROM trade_executions t
+LEFT JOIN trade_autopsies a ON t.id = a.trade_id
+ORDER BY t.opened_at DESC;
 
 -- Reload Supabase PostgREST schema cache immediately
 NOTIFY pgrst, 'reload schema';
