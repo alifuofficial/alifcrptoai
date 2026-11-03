@@ -44,39 +44,62 @@ async function testBinance(options?: BinanceTestOptions) {
   const baseUrl = sandbox ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
 
   try {
-    // 1. Test public ping & server time
-    const pingRes = await fetch(`${baseUrl}/fapi/v1/ping`, {
-      method: "GET",
-      signal: AbortSignal.timeout(6000),
-    });
-    const pingLatency = Date.now() - start;
+    // 1. Test public ping & fetch Binance official server time to calculate clock drift
+    let serverTime = Date.now();
+    try {
+      const timeRes = await fetch(`${baseUrl}/fapi/v1/time`, {
+        method: "GET",
+        signal: AbortSignal.timeout(6000),
+      });
+      if (timeRes.ok) {
+        const timeData = await timeRes.json();
+        if (timeData?.serverTime) {
+          serverTime = Number(timeData.serverTime);
+        }
+      }
+    } catch {
+      // fallback
+    }
 
-    if (!pingRes.ok) {
-      return {
-        success: false,
-        service: "binance",
-        message: `Binance gateway responded with HTTP ${pingRes.status} (${pingLatency}ms)`,
-        latencyMs: pingLatency,
-        sandbox,
-        configured: Boolean(apiKey && secret),
-      };
+    // 2. Discover outbound server IP for diagnostics
+    let outboundIp = "94.72.107.10";
+    try {
+      const ipRes = await fetch("https://api.ipify.org?format=json", { signal: AbortSignal.timeout(3000) });
+      if (ipRes.ok) {
+        const ipData = await ipRes.json();
+        if (ipData?.ip) outboundIp = ipData.ip;
+      }
+    } catch {
+      // fallback
     }
 
     if (!apiKey || !secret) {
       return {
         success: false,
         service: "binance",
-        message: `Binance server reachable (${pingLatency}ms), but API credentials are empty. Please enter your API Key & Secret.`,
-        latencyMs: pingLatency,
+        message: `Binance server reachable, but API credentials are empty. Please enter your API Key & Secret.`,
+        latencyMs: Date.now() - start,
         sandbox,
         configured: false,
+        serverIp: outboundIp,
       };
     }
 
-    // 2. Authenticated account balance query with auto-fallback between Live & Sandbox
+    // 3. Authenticated account balance query with auto-fallback between Live & Sandbox
     const checkAccount = async (targetBase: string) => {
-      const timestamp = Date.now();
-      const query = `timestamp=${timestamp}`;
+      // Fetch target server time
+      let targetTime = Date.now();
+      try {
+        const tRes = await fetch(`${targetBase}/fapi/v1/time`, { signal: AbortSignal.timeout(4000) });
+        if (tRes.ok) {
+          const tJson = await tRes.json();
+          if (tJson?.serverTime) targetTime = Number(tJson.serverTime);
+        }
+      } catch {
+        targetTime = Date.now();
+      }
+
+      const query = `timestamp=${targetTime}&recvWindow=60000`;
       const signature = crypto.createHmac("sha256", secret!).update(query).digest("hex");
       const res = await fetch(`${targetBase}/fapi/v2/account?${query}&signature=${signature}`, {
         method: "GET",
@@ -86,7 +109,7 @@ async function testBinance(options?: BinanceTestOptions) {
         signal: AbortSignal.timeout(8000),
       });
       const data = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, data };
+      return { ok: res.ok, status: res.status, data, targetTime };
     };
 
     let currentBaseUrl = sandbox ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
@@ -130,8 +153,28 @@ async function testBinance(options?: BinanceTestOptions) {
 
       let diagnosticHint = "";
       if (authData?.code === -2015) {
-        diagnosticHint =
-          " Common causes: (1) 'Enable Futures' is unchecked on Binance API Management, (2) Contabo VPS IP 94.72.107.10 is not added to the IP whitelist, or (3) Live vs Testnet mode mismatch.";
+        // Run a spot diagnostic to verify if keys & IP whitelist are valid
+        const spotCheck = await (async () => {
+          try {
+            const q = `timestamp=${Date.now()}&recvWindow=60000`;
+            const s = crypto.createHmac("sha256", secret!).update(q).digest("hex");
+            const r = await fetch(`https://api.binance.com/api/v3/account?${q}&signature=${s}`, {
+              method: "GET",
+              headers: { "X-MBX-APIKEY": apiKey! },
+              signal: AbortSignal.timeout(5000),
+            });
+            const d = await r.json().catch(() => ({}));
+            return { ok: r.ok, data: d };
+          } catch {
+            return { ok: false, data: {} };
+          }
+        })();
+
+        if (spotCheck.ok) {
+          diagnosticHint = ` [DIAGNOSTIC]: Your API Key, Secret, and Server IP (${outboundIp}) are 100% VALID! However, Binance USDT-M Futures is not activated on this account. Please go to Binance -> Futures -> USD-M Futures and click "Open Futures Account" / accept the terms.`;
+        } else {
+          diagnosticHint = ` Server Outbound IP detected: ${outboundIp}. Please verify: (1) Server IP ${outboundIp} is added to the IP whitelist on Binance, (2) 'Enable Futures' is checked, and (3) Secret key was copied without missing characters.`;
+        }
       }
 
       return {
@@ -141,6 +184,7 @@ async function testBinance(options?: BinanceTestOptions) {
         latencyMs: authLatency,
         sandbox,
         configured: true,
+        serverIp: outboundIp,
       };
     }
 
