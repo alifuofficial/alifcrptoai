@@ -73,29 +73,71 @@ async function testBinance(options?: BinanceTestOptions) {
       };
     }
 
-    // 2. Authenticated account balance query
-    const timestamp = Date.now();
-    const query = `timestamp=${timestamp}`;
-    const signature = crypto.createHmac("sha256", secret).update(query).digest("hex");
+    // 2. Authenticated account balance query with auto-fallback between Live & Sandbox
+    const checkAccount = async (targetBase: string) => {
+      const timestamp = Date.now();
+      const query = `timestamp=${timestamp}`;
+      const signature = crypto.createHmac("sha256", secret!).update(query).digest("hex");
+      const res = await fetch(`${targetBase}/fapi/v2/account?${query}&signature=${signature}`, {
+        method: "GET",
+        headers: {
+          "X-MBX-APIKEY": apiKey!,
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok, status: res.status, data };
+    };
 
-    const authRes = await fetch(`${baseUrl}/fapi/v2/account?${query}&signature=${signature}`, {
-      method: "GET",
-      headers: {
-        "X-MBX-APIKEY": apiKey,
-      },
-      signal: AbortSignal.timeout(8000),
-    });
+    let currentBaseUrl = sandbox ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+    let authCheck = await checkAccount(currentBaseUrl);
+
+    // If currently in sandbox/testnet mode and failed with Code -2015 (common when using live Binance.com keys):
+    // Automatically probe the LIVE production endpoint https://fapi.binance.com!
+    if (!authCheck.ok && sandbox) {
+      const liveCheck = await checkAccount("https://fapi.binance.com");
+      if (liveCheck.ok) {
+        authCheck = liveCheck;
+        currentBaseUrl = "https://fapi.binance.com";
+        sandbox = false;
+        try {
+          await supabase.from("bot_config").update({ sandbox_mode: false }).eq("id", 1);
+        } catch {
+          // ignore
+        }
+      }
+    } else if (!authCheck.ok && !sandbox) {
+      // If live failed, try testnet just in case user is testing with testnet keys
+      const testnetCheck = await checkAccount("https://testnet.binancefuture.com");
+      if (testnetCheck.ok) {
+        authCheck = testnetCheck;
+        currentBaseUrl = "https://testnet.binancefuture.com";
+        sandbox = true;
+        try {
+          await supabase.from("bot_config").update({ sandbox_mode: true }).eq("id", 1);
+        } catch {
+          // ignore
+        }
+      }
+    }
 
     const authLatency = Date.now() - start;
-    const authData = await authRes.json();
+    const authData = authCheck.data;
 
-    if (!authRes.ok) {
-      const errorMsg = authData?.msg || `HTTP ${authRes.status}`;
+    if (!authCheck.ok) {
+      const errorMsg = authData?.msg || `HTTP ${authCheck.status}`;
       const errorCode = authData?.code ? `[Code ${authData.code}] ` : "";
+
+      let diagnosticHint = "";
+      if (authData?.code === -2015) {
+        diagnosticHint =
+          " Common causes: (1) 'Enable Futures' is unchecked on Binance API Management, (2) Contabo VPS IP 94.72.107.10 is not added to the IP whitelist, or (3) Live vs Testnet mode mismatch.";
+      }
+
       return {
         success: false,
         service: "binance",
-        message: `Binance Auth Failed: ${errorCode}${errorMsg}`,
+        message: `Binance Auth Failed: ${errorCode}${errorMsg}.${diagnosticHint}`,
         latencyMs: authLatency,
         sandbox,
         configured: true,
@@ -105,11 +147,12 @@ async function testBinance(options?: BinanceTestOptions) {
     const totalWallet = Number(authData.totalWalletBalance || 0);
     const available = Number(authData.availableBalance || 0);
     const canTrade = authData.canTrade !== false;
+    const endpointLabel = currentBaseUrl.includes("testnet") ? "Testnet / Demo" : "LIVE Binance USD-M Futures";
 
     return {
       success: true,
       service: "binance",
-      message: `Binance Futures Connected! Total: $${totalWallet.toLocaleString("en-US", { minimumFractionDigits: 2 })} USDT (Trading: ${canTrade ? "Active" : "Disabled"}, Latency: ${authLatency}ms)`,
+      message: `Binance Connected (${endpointLabel})! Total: $${totalWallet.toLocaleString("en-US", { minimumFractionDigits: 2 })} USDT (Trading: ${canTrade ? "Active" : "Disabled"}, Latency: ${authLatency}ms)`,
       latencyMs: authLatency,
       sandbox,
       configured: true,
@@ -118,6 +161,7 @@ async function testBinance(options?: BinanceTestOptions) {
         availableBalance: available,
         canTrade,
         serverTime: authData.updateTime,
+        endpoint: currentBaseUrl,
       },
     };
   } catch (err: any) {
