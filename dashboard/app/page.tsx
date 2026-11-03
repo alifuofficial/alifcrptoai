@@ -4,44 +4,43 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
-  Cpu,
-  Shield,
-  ShieldAlert,
-  ShieldCheck,
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
   Activity,
-  Sliders,
-  AlertTriangle,
-  Play,
-  Pause,
-  RefreshCw,
-  LogOut,
+  LayoutDashboard,
   Layers,
-  FileText,
-  Brain,
-  CheckCircle2,
-  XCircle,
-  Eye,
-  EyeOff,
-  Flame,
-  Clock,
+  TrendingUp,
+  Newspaper,
+  Cpu,
+  BrainCircuit,
+  SlidersHorizontal,
+  LogOut,
+  ChevronRight,
+  PauseCircle,
+  PlayCircle,
+  Radio,
+  ShieldCheck,
+  ShieldAlert,
+  Gauge,
+  AlertOctagon,
+  DollarSign,
   ArrowUpRight,
   ArrowDownRight,
-  Zap,
-  LayoutDashboard,
-  BarChart3,
-  Search,
-  ExternalLink,
-  ChevronRight,
+  Target,
+  RefreshCw,
+  ArrowRight,
+  Clock,
   Menu,
   X,
-  User,
-  Newspaper,
-  Globe,
-  Calendar,
-  Filter,
+  Search,
+  Sliders,
+  Eye,
+  EyeOff,
+  ExternalLink,
+  Radar,
+  AlertTriangle,
+  Zap,
+  Shield,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 // --- TYPES ---
@@ -202,8 +201,7 @@ export default function CommandCenterPage() {
 
   // UI States
   const [activeSection, setActiveSection] = useState<NavSection>("overview");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("7D");
+  const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [statusNotification, setStatusNotification] = useState<string | null>(null);
@@ -315,7 +313,6 @@ export default function CommandCenterPage() {
         if (!newsErr && newsData && newsData.length > 0) {
           setNewsItems(newsData);
         } else {
-          // If table empty, fetch and sync
           fetchNewsFromApi(false);
         }
       } catch {
@@ -364,7 +361,7 @@ export default function CommandCenterPage() {
 
     // Supabase Realtime Channels
     const channel = supabase
-      .channel("command-center-realtime-v2")
+      .channel("command-center-realtime-fintech")
       .on("postgres_changes", { event: "*", schema: "public", table: "bot_config" }, (payload) => {
         if (payload.new) {
           setConfig(payload.new as BotConfig);
@@ -423,7 +420,7 @@ export default function CommandCenterPage() {
     setConfig({ ...config, sandbox_mode: newSandbox });
     const { error } = await supabase.from("bot_config").update({ sandbox_mode: newSandbox }).eq("id", 1);
     if (!error) {
-      showToast(`Switched mode to ${newSandbox ? "TESTNET / SANDBOX" : "LIVE BINANCE USDM"}`);
+      showToast(`Switched mode to ${newSandbox ? "TESTNET / DEMO" : "LIVE BINANCE USDM"}`);
     }
   };
 
@@ -543,8 +540,8 @@ export default function CommandCenterPage() {
 
       if (newsSearchQuery.trim()) {
         const q = newsSearchQuery.toLowerCase();
-        const matchTitle = item.title.toLowerCase().includes(q);
-        const matchSource = item.source.toLowerCase().includes(q);
+        const matchTitle = item.title?.toLowerCase().includes(q);
+        const matchSource = item.source?.toLowerCase().includes(q);
         const matchCoin = (item.coin || "").toLowerCase().includes(q);
         if (!matchTitle && !matchSource && !matchCoin) return false;
       }
@@ -553,7 +550,7 @@ export default function CommandCenterPage() {
     });
   }, [newsItems, selectedNewsCategory, newsSearchQuery]);
 
-  // Synthetic equity curve for SVG Area Chart if snapshots are few
+  // Synthetic equity curve for SVG Area Chart
   const chartPoints = useMemo(() => {
     if (snapshotsHistory.length >= 2) {
       return snapshotsHistory.map((s, idx) => ({
@@ -563,58 +560,56 @@ export default function CommandCenterPage() {
         time: new Date(s.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       }));
     }
-    // Baseline points if starting fresh
     const base = Number(latestSnapshot?.equity_usdt || 10000);
     return [
-      { x: 0, y: base * 0.998, pnl: -20, time: "09:00" },
-      { x: 1, y: base * 0.999, pnl: -10, time: "11:00" },
-      { x: 2, y: base * 1.001, pnl: 10, time: "13:00" },
-      { x: 3, y: base * 1.0025, pnl: 25, time: "15:00" },
+      { x: 0, y: base * 0.997, pnl: -30, time: "09:00" },
+      { x: 1, y: base * 0.9985, pnl: -15, time: "11:00" },
+      { x: 2, y: base * 1.0015, pnl: 15, time: "13:00" },
+      { x: 3, y: base * 1.0035, pnl: 35, time: "15:00" },
       { x: 4, y: base, pnl: Number(latestSnapshot?.daily_pnl_usdt || 0), time: "Current" },
     ];
   }, [snapshotsHistory, latestSnapshot]);
 
-  // Chart SVG Coordinates generator
+  // Chart SVG Coordinates generator (viewBox 0 0 1000 200)
   const svgPathData = useMemo(() => {
-    if (chartPoints.length < 2) return { path: "", fillPath: "", min: 0, max: 0 };
+    if (chartPoints.length < 2) return { path: "", min: 0, max: 0, coords: [] };
     const values = chartPoints.map((p) => p.y);
     const min = Math.min(...values) * 0.999;
     const max = Math.max(...values) * 1.001;
     const range = max - min || 1;
-    const width = 600;
-    const height = 180;
+    const width = 1000;
+    const height = 200;
 
-    const points = chartPoints.map((p, i) => {
+    const coords = chartPoints.map((p, i) => {
       const px = (i / (chartPoints.length - 1)) * width;
-      const py = height - ((p.y - min) / range) * (height - 20) - 10;
-      return `${px},${py}`;
+      const py = height - ((p.y - min) / range) * (height - 40) - 20;
+      return { x: px, y: py };
     });
 
-    const path = `M ${points.join(" L ")}`;
-    const fillPath = `M 0,${height} L ${points.join(" L ")} L ${width},${height} Z`;
+    const path = `M ${coords.map((c) => `${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" L ")}`;
 
-    return { path, fillPath, min, max };
+    return { path, min, max, coords };
   }, [chartPoints]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased">
+    <div className="bg-background text-textMain font-sans antialiased h-screen flex overflow-hidden selection:bg-brand-100 selection:text-brand-900">
       {/* Toast Notification */}
       {statusNotification && (
-        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-indigo-200 bg-white px-4 py-3 text-sm font-semibold text-indigo-700 shadow-elevated animate-bounce">
-          <Zap className="h-4 w-4 text-indigo-600" />
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-md border border-brand-500 bg-surface px-4 py-3 text-xs font-semibold text-brand-600 shadow-md animate-bounce">
+          <Zap className="h-4 w-4 text-brand-600" />
           <span>{statusNotification}</span>
         </div>
       )}
 
       {/* EMERGENCY PANIC MODAL */}
       {showPanicModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-lg border border-rose-200 bg-surface p-6 shadow-xl">
             <div className="flex items-center gap-3 text-rose-600 mb-3">
-              <AlertTriangle className="h-7 w-7 animate-pulse" />
-              <h3 className="text-lg font-bold text-slate-900">Emergency Panic Flatten</h3>
+              <AlertOctagon className="h-6 w-6 animate-pulse" />
+              <h3 className="text-base font-bold text-textMain">Emergency Panic Flatten</h3>
             </div>
-            <p className="text-xs text-slate-600 mb-6 leading-relaxed">
+            <p className="text-xs text-textMuted mb-6 leading-relaxed">
               This will <strong>IMMEDIATELY CANCEL ALL CONDITIONAL ORDERS</strong> on Binance and execute
               <strong> MARKET CLOSE</strong> on every active futures position, setting the bot state to <strong>PAUSED</strong>.
               Are you sure you want to proceed?
@@ -622,13 +617,13 @@ export default function CommandCenterPage() {
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowPanicModal(false)}
-                className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
+                className="rounded-md border border-border bg-surface px-4 py-2 text-xs font-semibold text-textMain hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 Cancel / Stand Down
               </button>
               <button
                 onClick={triggerPanicCloseAll}
-                className="rounded-xl bg-rose-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-rose-600/20 hover:bg-rose-700 transition-all cursor-pointer"
+                className="rounded-md bg-rose-600 px-5 py-2 text-xs font-bold text-white hover:bg-rose-700 transition-all cursor-pointer"
               >
                 CONFIRM FLATTEN ALL
               </button>
@@ -638,420 +633,366 @@ export default function CommandCenterPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* SIDEBAR NAVIGATION */}
+      {/* SIDEBAR */}
       {/* ========================================================================= */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200 bg-white transition-all duration-300 md:static ${
-          sidebarOpen ? "w-64" : "w-20"
-        }`}
-      >
-        {/* Brand Header */}
-        <div className="flex h-16 items-center justify-between border-b border-slate-100 px-4">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 shadow-sm shadow-indigo-500/20 text-white font-bold">
-              <Cpu className="h-5 w-5" />
-            </div>
-            {sidebarOpen && (
-              <div className="flex flex-col">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-sm text-slate-900 tracking-tight">alifcrptoai</span>
-                  <span className="rounded-md bg-indigo-50 px-1.5 py-0.2 text-[9px] font-bold text-indigo-600 border border-indigo-100 uppercase">
-                    PRO
-                  </span>
-                </div>
-                <span className="text-[10px] text-slate-600 font-medium truncate">By Alifu Haji</span>
+      <aside className="w-64 bg-surface border-r border-border flex flex-col h-full shrink-0 z-20">
+        {/* Logo Area */}
+        <div className="h-16 flex items-center px-6 border-b border-border">
+          <div className="w-8 h-8 bg-brand-900 rounded flex items-center justify-center mr-3">
+            <Activity className="text-white w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="font-bold text-sm tracking-wide leading-tight">alifcrptoai</h1>
+            <span className="text-[10px] text-textMuted font-medium uppercase tracking-wider">By Alifu Haji</span>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+          {/* Section 1: Trading Desk */}
+          <div>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
+            <button
+              onClick={() => setActiveSection("overview")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "overview"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 mr-3" />
+              <span>Overview &amp; KPIs</span>
+            </button>
+
+            <button
+              onClick={() => setActiveSection("positions")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "positions"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Layers className="w-4 h-4 mr-3" />
+                <span>Live Positions</span>
               </div>
-            )}
-          </div>
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="hidden md:flex rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-700 transition-colors"
-            title="Toggle Sidebar"
-          >
-            <Menu className="h-4 w-4" />
-          </button>
-        </div>
+              {openTrades.length > 0 && (
+                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                  {openTrades.length}
+                </span>
+              )}
+            </button>
 
-        {/* Navigation Groups */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-          {/* Group 1: TRADING DESK */}
+            <button
+              onClick={() => setActiveSection("strategies")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "strategies"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <TrendingUp className="w-4 h-4 mr-3" />
+              <span>Strategy Analytics</span>
+            </button>
+          </div>
+
+          {/* Section 2: Market Intelligence */}
           <div>
-            {sidebarOpen && (
-              <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-2">Trading Desk</p>
-            )}
-            <nav className="space-y-1">
-              <button
-                onClick={() => setActiveSection("overview")}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "overview"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <LayoutDashboard className="h-4 w-4 shrink-0 text-indigo-500" />
-                {sidebarOpen && <span>Overview &amp; KPIs</span>}
-              </button>
-
-              <button
-                onClick={() => setActiveSection("positions")}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "positions"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Layers className="h-4 w-4 shrink-0 text-cyan-600" />
-                  {sidebarOpen && <span>Live Positions</span>}
-                </div>
-                {sidebarOpen && openTrades.length > 0 && (
-                  <span className="rounded-full bg-cyan-100 border border-cyan-200 px-2 py-0.5 text-[10px] font-bold text-cyan-800">
-                    {openTrades.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveSection("strategies")}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "strategies"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <TrendingUp className="h-4 w-4 shrink-0 text-emerald-600" />
-                {sidebarOpen && <span>Strategy Analytics</span>}
-              </button>
-            </nav>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
+            <button
+              onClick={() => setActiveSection("news")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "news"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Newspaper className="w-4 h-4 mr-3" />
+                <span>Market &amp; Macro News</span>
+              </div>
+              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                {newsItems.length}
+              </span>
+            </button>
           </div>
 
-          {/* Group 2: MARKET INTELLIGENCE */}
+          {/* Section 3: AI Intelligence */}
           <div>
-            {sidebarOpen && (
-              <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-2">Market Intelligence</p>
-            )}
-            <nav className="space-y-1">
-              <button
-                onClick={() => setActiveSection("news")}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "news"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Newspaper className="h-4 w-4 shrink-0 text-blue-600" />
-                  {sidebarOpen && <span>Market &amp; Macro News</span>}
-                </div>
-                {sidebarOpen && newsItems.length > 0 && (
-                  <span className="rounded-full bg-blue-100 border border-blue-200 px-2 py-0.5 text-[10px] font-bold text-blue-800">
-                    {newsItems.length}
-                  </span>
-                )}
-              </button>
-            </nav>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
+            <button
+              onClick={() => setActiveSection("audits")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "audits"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Cpu className="w-4 h-4 mr-3" />
+                <span>DeepSeek Audits</span>
+              </div>
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+            </button>
+
+            <button
+              onClick={() => setActiveSection("autopsies")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "autopsies"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <BrainCircuit className="w-4 h-4 mr-3" />
+                <span>Self-Learning</span>
+              </div>
+              {lessons.filter((l) => l.status === "PENDING").length > 0 && (
+                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
+                  {lessons.filter((l) => l.status === "PENDING").length}
+                </span>
+              )}
+            </button>
           </div>
 
-          {/* Group 3: AI INTELLIGENCE & FORENSICS */}
+          {/* Section 4: Management */}
           <div>
-            {sidebarOpen && (
-              <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-2">AI Intelligence</p>
-            )}
-            <nav className="space-y-1">
-              <button
-                onClick={() => setActiveSection("audits")}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "audits"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Brain className="h-4 w-4 shrink-0 text-violet-600" />
-                  {sidebarOpen && <span>DeepSeek Audits</span>}
-                </div>
-                {sidebarOpen && (
-                  <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" title="Live Engine Feed" />
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveSection("autopsies")}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "autopsies"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="h-4 w-4 shrink-0 text-amber-500" />
-                  {sidebarOpen && <span>Self-Learning</span>}
-                </div>
-                {sidebarOpen && lessons.filter((l) => l.status === "PENDING").length > 0 && (
-                  <span className="rounded-full bg-amber-100 border border-amber-200 px-1.5 py-0.2 text-[10px] font-bold text-amber-700">
-                    {lessons.filter((l) => l.status === "PENDING").length}
-                  </span>
-                )}
-              </button>
-            </nav>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
+            <button
+              onClick={() => setActiveSection("settings")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "settings"
+                  ? "bg-brand-50 text-brand-600"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <SlidersHorizontal className="w-4 h-4 mr-3" />
+              <span>Risk &amp; Settings</span>
+            </button>
           </div>
+        </nav>
 
-          {/* Group 3: MANAGEMENT */}
-          <div>
-            {sidebarOpen && (
-              <p className="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-2">Management</p>
-            )}
-            <nav className="space-y-1">
-              <button
-                onClick={() => setActiveSection("settings")}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                  activeSection === "settings"
-                    ? "bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                }`}
-              >
-                <Sliders className="h-4 w-4 shrink-0 text-slate-500" />
-                {sidebarOpen && <span>Risk &amp; Settings</span>}
-              </button>
-            </nav>
-          </div>
-        </div>
-
-        {/* Sidebar Footer: User Card */}
-        <div className="border-t border-slate-100 p-3">
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold">
+        {/* User Profile */}
+        <div className="p-4 border-t border-border">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">
                 AH
               </div>
-              {sidebarOpen && (
-                <div className="flex flex-col truncate">
-                  <span className="text-xs font-bold text-slate-900 truncate">Alifu Haji</span>
-                  <span className="text-[10px] text-slate-600 flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Realtime Active
-                  </span>
-                </div>
-              )}
+              <div className="ml-3">
+                <p className="text-sm font-semibold leading-tight">Alifu Haji</p>
+                <p className="text-[10px] text-emerald-600 font-medium flex items-center mt-0.5">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5"></span> Realtime Active
+                </p>
+              </div>
             </div>
             <button
-              onClick={() => supabase.auth.signOut()}
-              className="text-slate-400 hover:text-rose-600 transition-colors p-1"
+              onClick={() => supabase.auth.signOut().then(() => router.push("/login"))}
+              className="text-textMuted hover:text-textMain p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
               title="Sign Out"
             >
-              <LogOut className="h-4 w-4" />
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </aside>
 
       {/* ========================================================================= */}
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN CONTENT */}
       {/* ========================================================================= */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* TOP COMMAND HEADER BAR */}
-        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 md:px-8 backdrop-blur-md">
-          {/* Breadcrumb & Section Name */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="md:hidden rounded-lg p-2 text-slate-600 hover:bg-slate-100"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-            <div>
-              <div className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider flex items-center gap-1">
-                <span>Desk</span>
-                <ChevronRight className="h-3 w-3" />
-                <span className="text-indigo-600 capitalize">{activeSection}</span>
-              </div>
-              <h1 className="text-base font-bold text-slate-900 capitalize">
-                {activeSection === "overview" && "Executive Overview & Telemetry"}
-                {activeSection === "positions" && "Live Open Positions & Orders"}
-                {activeSection === "strategies" && "Strategy Leaderboard & Analytics"}
-                {activeSection === "news" && "Market Catalysts & Macro Intelligence Feed"}
-                {activeSection === "audits" && "DeepSeek AI Risk Rubric Stream"}
-                {activeSection === "autopsies" && "Autonomous Self-Improvement & Autopsies"}
-                {activeSection === "settings" && "Quantitative Risk & Bot Controls"}
-              </h1>
-            </div>
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* TOP HEADER */}
+        <header className="h-16 bg-surface border-b border-border flex items-center justify-between px-6 shrink-0">
+          <div className="flex items-center space-x-2 text-sm text-textMuted">
+            <span>DESK</span>
+            <ChevronRight className="w-3 h-3" />
+            <span className="font-medium text-textMain capitalize">
+              {activeSection === "overview" && "Overview"}
+              {activeSection === "positions" && "Live Positions"}
+              {activeSection === "strategies" && "Strategy Analytics"}
+              {activeSection === "news" && "Market & Macro News"}
+              {activeSection === "audits" && "DeepSeek Audits"}
+              {activeSection === "autopsies" && "Self-Learning"}
+              {activeSection === "settings" && "Risk & Settings"}
+            </span>
           </div>
 
-          {/* Quick Command Pills */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Engine Toggle */}
+          {/* Status Toggles */}
+          <div className="flex items-center space-x-3 text-xs font-medium">
             <button
               onClick={toggleBotActive}
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all border ${
+              className={`flex items-center px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
                 config?.is_active
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 shadow-xs"
-                  : "border-amber-200 bg-amber-50 text-amber-700"
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                  : "bg-amber-50 border-amber-200 text-amber-700"
               }`}
             >
-              {config?.is_active ? <Play className="h-3.5 w-3.5 fill-current" /> : <Pause className="h-3.5 w-3.5 fill-current" />}
-              <span className="hidden sm:inline">{config?.is_active ? "RUNNING" : "PAUSED"}</span>
+              {config?.is_active ? (
+                <PlayCircle className="w-3.5 h-3.5 mr-1.5" />
+              ) : (
+                <PauseCircle className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              <span>{config?.is_active ? "RUNNING" : "PAUSED"}</span>
             </button>
 
-            {/* Sandbox Mode */}
             <button
               onClick={toggleSandboxMode}
-              className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all border ${
+              className={`flex items-center px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
                 config?.sandbox_mode
-                  ? "border-sky-200 bg-sky-50 text-sky-700"
-                  : "border-rose-200 bg-rose-50 text-rose-700"
+                  ? "bg-blue-50 border-blue-200 text-blue-700"
+                  : "bg-rose-50 border-rose-200 text-rose-700"
               }`}
             >
-              <Shield className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{config?.sandbox_mode ? "TESTNET" : "LIVE BINANCE"}</span>
+              <Radio className="w-3.5 h-3.5 mr-1.5" />
+              <span>{config?.sandbox_mode ? "TESTNET / DEMO" : "LIVE BINANCE"}</span>
             </button>
 
-            {/* Macro Shield */}
-            <div className="hidden lg:flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-              <span className="text-slate-600">Macro Shield:</span>
-              <span className="text-emerald-700 font-bold">NORMAL</span>
+            <div className="hidden sm:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md">
+              <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-500" /> NORMAL
             </div>
 
-            {/* Net Exposure */}
-            <div className="hidden xl:flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
-              <Layers className="h-3.5 w-3.5 text-indigo-600" />
-              <span className="text-slate-600">Risk:</span>
-              <span className="font-mono font-bold text-indigo-700">
-                {calculatedExposure.current}% / {calculatedExposure.max}%
-              </span>
+            <div className="hidden md:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md tabular-nums">
+              <Gauge className="w-3.5 h-3.5 mr-1.5 text-brand-500" /> {calculatedExposure.current}% / {calculatedExposure.max}%
             </div>
 
-            {/* Panic Button */}
             <button
               onClick={() => setShowPanicModal(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-600 hover:text-white transition-all shadow-xs cursor-pointer"
+              className="flex items-center px-3 py-1.5 border border-rose-600 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
             >
-              <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />
-              <span>PANIC CLOSE</span>
+              <AlertOctagon className="w-3.5 h-3.5 mr-1.5" /> PANIC CLOSE
             </button>
           </div>
         </header>
 
-        {/* MAIN BODY PER SECTION */}
-        <div className="p-4 md:p-8 space-y-6">
+        {/* SCROLLABLE DASHBOARD AREA */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* ========================================================================= */}
-          {/* SECTION 1: EXECUTIVE OVERVIEW */}
+          {/* TAB 1: EXECUTIVE OVERVIEW */}
           {/* ========================================================================= */}
           {activeSection === "overview" && (
             <div className="space-y-6">
-              {/* 4 TOP TELEMETRY CARDS */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Card 1: Total USDT Equity */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition-all hover:shadow-elevated">
-                  <div className="flex items-center justify-between text-slate-600 text-xs font-semibold uppercase tracking-wider mb-2">
-                    <span>Total USDT Equity</span>
-                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
-                      <DollarSign className="h-4 w-4" />
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xl font-semibold tracking-tight">Executive Overview &amp; Telemetry</h2>
+              </div>
+
+              {/* KPI CARDS GRID */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Card 1 */}
+                <div className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="text-[11px] font-bold text-textMuted uppercase tracking-wider">
+                      Total USDT Equity
                     </span>
+                    <DollarSign className="w-4 h-4 text-slate-300" />
                   </div>
-                  <div className="text-2xl font-extrabold font-mono text-slate-900 tracking-tight">
-                    ${Number(latestSnapshot?.equity_usdt || 10000.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                  <div className="mt-2.5 flex items-center text-xs font-semibold text-emerald-600">
-                    <TrendingUp className="h-3.5 w-3.5 mr-1" />
-                    <span>Binance USDT-M Futures Mark</span>
+                  <div>
+                    <div className="text-3xl font-bold tabular-nums tracking-tight">
+                      ${Number(latestSnapshot?.equity_usdt || 10000.0).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <div className="flex items-center text-xs text-brand-600 font-medium mt-2">
+                      <TrendingUp className="w-3.5 h-3.5 mr-1" /> Binance USDT-M Futures Mark
+                    </div>
                   </div>
                 </div>
 
-                {/* Card 2: Free Margin */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition-all hover:shadow-elevated">
-                  <div className="flex items-center justify-between text-slate-600 text-xs font-semibold uppercase tracking-wider mb-2">
-                    <span>Available Free Margin</span>
-                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
-                      <Activity className="h-4 w-4" />
+                {/* Card 2 */}
+                <div className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="text-[11px] font-bold text-textMuted uppercase tracking-wider">
+                      Available Free Margin
                     </span>
+                    <Activity className="w-4 h-4 text-slate-300" />
                   </div>
-                  <div className="text-2xl font-extrabold font-mono text-sky-700 tracking-tight">
-                    ${Number(latestSnapshot?.free_usdt || 10000.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <div>
+                    <div className="text-3xl font-bold tabular-nums tracking-tight">
+                      ${Number(latestSnapshot?.free_usdt || 10000.0).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-3">
+                      <div
+                        className="bg-brand-500 h-1.5 rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            ((Number(latestSnapshot?.free_usdt || 10000) / Number(latestSnapshot?.equity_usdt || 10000)) *
+                              100)
+                          )}%`,
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="mt-3 h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                </div>
+
+                {/* Card 3 */}
+                <div className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="text-[11px] font-bold text-textMuted uppercase tracking-wider">
+                      Today's Realized P&amp;L
+                    </span>
+                    {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? (
+                      <ArrowUpRight className="w-4 h-4 text-emerald-500" />
+                    ) : (
+                      <ArrowDownRight className="w-4 h-4 text-rose-500" />
+                    )}
+                  </div>
+                  <div>
                     <div
-                      className="h-full bg-sky-500 rounded-full transition-all duration-500"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          ((Number(latestSnapshot?.free_usdt || 10000) / Number(latestSnapshot?.equity_usdt || 10000)) * 100)
-                        )}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Card 3: Intraday Realized P&L */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition-all hover:shadow-elevated">
-                  <div className="flex items-center justify-between text-slate-600 text-xs font-semibold uppercase tracking-wider mb-2">
-                    <span>Today's Realized P&L</span>
-                    <span
-                      className={`flex h-7 w-7 items-center justify-center rounded-lg ${
-                        (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                      className={`text-3xl font-bold tabular-nums tracking-tight ${
+                        (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
                       }`}
                     >
-                      {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? (
-                        <ArrowUpRight className="h-4 w-4" />
-                      ) : (
-                        <ArrowDownRight className="h-4 w-4" />
-                      )}
-                    </span>
+                      {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "+" : ""}$
+                      {Number(latestSnapshot?.daily_pnl_usdt || 0).toFixed(2)}
+                    </div>
+                    <div className="text-xs text-textMuted mt-2 font-medium">Closed trades since 00:00 UTC</div>
                   </div>
-                  <div
-                    className={`text-2xl font-extrabold font-mono tracking-tight ${
-                      (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
-                    }`}
-                  >
-                    {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "+" : ""}
-                    ${Number(latestSnapshot?.daily_pnl_usdt || 0).toFixed(2)}
-                    <span className="text-xs font-bold ml-1.5 text-slate-600">
-                      ({(latestSnapshot?.daily_pnl_pct || 0) >= 0 ? "+" : ""}
-                      {Number(latestSnapshot?.daily_pnl_pct || 0).toFixed(2)}%)
-                    </span>
-                  </div>
-                  <div className="mt-2 text-xs text-slate-600">Closed trades since 00:00 UTC</div>
                 </div>
 
-                {/* Card 4: Overall Win Rate / Active Positions */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition-all hover:shadow-elevated">
-                  <div className="flex items-center justify-between text-slate-600 text-xs font-semibold uppercase tracking-wider mb-2">
-                    <span>Win Rate / Active</span>
-                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                      <Flame className="h-4 w-4" />
+                {/* Card 4 */}
+                <div className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between">
+                  <div className="flex justify-between items-start mb-4">
+                    <span className="text-[11px] font-bold text-textMuted uppercase tracking-wider">
+                      Win Rate / Active
                     </span>
+                    <Target className="w-4 h-4 text-slate-300" />
                   </div>
-                  <div className="text-2xl font-extrabold font-mono text-slate-900 tracking-tight flex items-center justify-between">
-                    <span>{overallStats.winRate}%</span>
-                    <span className="text-xs font-bold rounded-lg bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-indigo-700">
-                      {openTrades.length} Active
-                    </span>
-                  </div>
-                  <div className="mt-2 text-xs text-slate-600">
-                    {overallStats.totalWins} Wins / {overallStats.totalClosed - overallStats.totalWins} Losses across all strategies
+                  <div>
+                    <div className="text-3xl font-bold tabular-nums tracking-tight">{overallStats.winRate}%</div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-textMuted font-medium">
+                        {overallStats.totalWins} Wins / {overallStats.totalClosed - overallStats.totalWins} Losses
+                      </span>
+                      <span className="bg-brand-50 text-brand-600 text-[10px] font-bold px-2 py-0.5 rounded border border-brand-100">
+                        {openTrades.length} Active
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* INTERACTIVE PERFORMANCE CHART CARD */}
-              <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card">
-                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+              {/* CHART SECTION */}
+              <div className="bg-surface border border-border rounded-lg p-6">
+                <div className="flex justify-between items-start mb-6">
                   <div>
-                    <h2 className="text-base font-bold text-slate-900">Portfolio Performance &amp; Equity Growth</h2>
-                    <p className="text-xs text-slate-600">
+                    <h3 className="text-base font-semibold">Portfolio Performance &amp; Equity Growth</h3>
+                    <p className="text-xs text-textMuted mt-1">
                       Continuous capital valuation synchronized from Binance Futures account snapshots
                     </p>
                   </div>
-
-                  <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                  <div className="flex bg-slate-100 p-1 rounded-md">
                     {(["24H", "7D", "30D", "ALL"] as const).map((tf) => (
                       <button
                         key={tf}
                         onClick={() => setChartTimeframe(tf)}
-                        className={`rounded-lg px-3 py-1 text-xs font-bold transition-all ${
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
                           chartTimeframe === tf
-                            ? "bg-white text-indigo-700 shadow-xs"
-                            : "text-slate-600 hover:text-slate-900"
+                            ? "bg-surface text-textMain shadow-xs border border-border"
+                            : "text-textMuted hover:text-textMain"
                         }`}
                       >
                         {tf}
@@ -1060,113 +1001,112 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* SVG Area Chart */}
-                <div className="relative w-full h-52">
-                  <svg viewBox="0 0 600 180" className="w-full h-full overflow-visible" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="equityGradLight" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.18" />
-                        <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.0" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Gradient Fill Area */}
-                    {svgPathData.fillPath && <path d={svgPathData.fillPath} fill="url(#equityGradLight)" />}
-
-                    {/* Line Stroke */}
-                    {svgPathData.path && (
-                      <path d={svgPathData.path} fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinecap="round" />
-                    )}
-
-                    {/* Interactive Points */}
-                    {chartPoints.map((p, i) => {
-                      const width = 600;
-                      const height = 180;
-                      const range = svgPathData.max - svgPathData.min || 1;
-                      const px = (i / (chartPoints.length - 1)) * width;
-                      const py = height - ((p.y - svgPathData.min) / range) * (height - 20) - 10;
-
-                      return (
-                        <g key={i} className="group cursor-pointer">
-                          <circle
-                            cx={px}
-                            cy={py}
-                            r="4"
-                            className="fill-white stroke-indigo-600 stroke-2 group-hover:r-6 transition-all"
-                          />
-                        </g>
-                      );
-                    })}
-                  </svg>
-
-                  {/* Horizontal Guide lines */}
-                  <div className="absolute inset-x-0 top-0 flex justify-between text-[10px] text-slate-600 font-mono border-b border-slate-100 pb-1">
-                    <span>High: ${svgPathData.max.toFixed(2)}</span>
-                    <span>Low: ${svgPathData.min.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex items-center justify-between text-xs text-slate-600 border-t border-slate-100 pt-3">
-                  <span>Start: {chartPoints[0]?.time}</span>
-                  <div className="flex items-center gap-4">
-                    <span className="flex items-center gap-1.5 font-semibold text-slate-700">
-                      <span className="h-2 w-2 rounded-full bg-indigo-600" />
-                      Cumulative Equity
+                {/* Chart Area */}
+                <div className="relative w-full h-64 flex flex-col justify-between">
+                  {/* Labels Top */}
+                  <div className="flex justify-between text-[11px] font-medium text-textMuted border-b border-border pb-2">
+                    <span>
+                      High: <span className="text-textMain tabular-nums">${svgPathData.max.toFixed(2)}</span>
+                    </span>
+                    <span>
+                      Low: <span className="text-textMain tabular-nums">${svgPathData.min.toFixed(2)}</span>
                     </span>
                   </div>
-                  <span>Latest: {chartPoints[chartPoints.length - 1]?.time}</span>
+
+                  {/* SVG Chart Line */}
+                  <div className="absolute inset-0 top-8 flex items-center justify-center">
+                    <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 1000 200">
+                      {/* Grid lines */}
+                      <line x1="0" y1="50" x2="1000" y2="50" stroke="#f1f5f9" strokeWidth="1" />
+                      <line x1="0" y1="100" x2="1000" y2="100" stroke="#f1f5f9" strokeWidth="1" />
+                      <line x1="0" y1="150" x2="1000" y2="150" stroke="#f1f5f9" strokeWidth="1" />
+
+                      {/* Line */}
+                      {svgPathData.path && (
+                        <path
+                          d={svgPathData.path}
+                          fill="none"
+                          stroke="#2563eb"
+                          strokeWidth="2.5"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      )}
+
+                      {/* Data Points */}
+                      {svgPathData.coords.map((c, i) => (
+                        <circle
+                          key={i}
+                          cx={c.x}
+                          cy={c.y}
+                          r="4"
+                          fill="#ffffff"
+                          stroke="#2563eb"
+                          strokeWidth="2"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ))}
+                    </svg>
+                  </div>
+
+                  {/* Labels Bottom */}
+                  <div className="flex justify-between text-[11px] font-medium text-textMuted mt-2">
+                    <span>Start: {chartPoints[0]?.time}</span>
+                    <span className="flex items-center text-brand-600">
+                      <div className="w-2 h-2 rounded-full bg-brand-500 mr-1.5"></div> Cumulative Equity
+                    </span>
+                    <span>Latest: {chartPoints[chartPoints.length - 1]?.time}</span>
+                  </div>
                 </div>
               </div>
 
-              {/* QUICK DUAL PANELS: LIVE POSITIONS & LATEST AUDITS */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Panel 1: Live Positions Quick View */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-cyan-600" />
-                      <h3 className="font-bold text-sm text-slate-900">Active Positions ({openTrades.length})</h3>
-                    </div>
+              {/* MIDDLE SECTION (2 Columns) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Active Positions */}
+                <div className="bg-surface border border-border rounded-lg flex flex-col">
+                  <div className="px-5 py-4 border-b border-border flex justify-between items-center">
+                    <h3 className="text-sm font-semibold flex items-center">
+                      <Layers className="w-4 h-4 mr-2 text-brand-500" /> Active Positions ({openTrades.length})
+                    </h3>
                     <button
                       onClick={() => setActiveSection("positions")}
-                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                      className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center cursor-pointer"
                     >
-                      View All <ChevronRight className="h-3 w-3" />
+                      View All <ChevronRight className="w-3 h-3 ml-0.5" />
                     </button>
                   </div>
-
                   {openTrades.length === 0 ? (
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-6 text-center text-xs text-slate-600">
-                      No active positions. Multi-strategy scanner is monitoring 15m candle streams.
+                    <div className="flex-1 p-5 flex items-center justify-center bg-slate-50/50 m-4 border border-dashed border-slate-200 rounded text-center">
+                      <p className="text-xs text-textMuted max-w-sm">
+                        No active positions. Multi-strategy scanner is monitoring 15m candle streams.
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-2.5">
+                    <div className="p-4 space-y-2">
                       {openTrades.slice(0, 3).map((t) => (
                         <div
                           key={t.id}
-                          className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs"
+                          className="flex items-center justify-between p-3 rounded border border-border bg-slate-50/50 hover:bg-slate-50 transition-colors"
                         >
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center space-x-3">
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
                                 t.side === "LONG"
-                                  ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                                  : "bg-rose-100 text-rose-800 border border-rose-200"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : "bg-rose-50 text-rose-700 border-rose-200"
                               }`}
                             >
                               {t.side}
                             </span>
                             <div>
-                              <div className="font-bold text-slate-900">{t.symbol}</div>
-                              <div className="text-[10px] text-slate-600">{t.strategy_name}</div>
+                              <p className="text-xs font-semibold text-textMain">{t.symbol}</p>
+                              <p className="text-[10px] text-textMuted">{t.strategy_name}</p>
                             </div>
                           </div>
-
                           <div className="text-right">
-                            <div className="font-mono font-bold text-slate-800">${Number(t.entry_price).toFixed(2)}</div>
-                            <div className="text-[10px] text-emerald-700 font-semibold font-mono">
+                            <p className="text-xs font-semibold tabular-nums">${Number(t.entry_price).toFixed(2)}</p>
+                            <p className="text-[10px] text-emerald-600 font-medium tabular-nums">
                               MFE: +{Number(t.mfe_r || 0).toFixed(2)}R
-                            </div>
+                            </p>
                           </div>
                         </div>
                       ))}
@@ -1174,57 +1114,54 @@ export default function CommandCenterPage() {
                   )}
                 </div>
 
-                {/* Panel 2: Latest DeepSeek AI Decisions */}
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Brain className="h-4 w-4 text-violet-600" />
-                      <h3 className="font-bold text-sm text-slate-900">Latest AI Risk Audits</h3>
-                    </div>
+                {/* Risk Audits */}
+                <div className="bg-surface border border-border rounded-lg flex flex-col">
+                  <div className="px-5 py-4 border-b border-border flex justify-between items-center">
+                    <h3 className="text-sm font-semibold flex items-center">
+                      <ShieldAlert className="w-4 h-4 mr-2 text-brand-500" /> Latest AI Risk Audits
+                    </h3>
                     <button
                       onClick={() => setActiveSection("audits")}
-                      className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                      className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center cursor-pointer"
                     >
-                      Audit Stream <ChevronRight className="h-3 w-3" />
+                      Audit Stream <ChevronRight className="w-3 h-3 ml-0.5" />
                     </button>
                   </div>
-
                   {recentAudits.length === 0 ? (
-                    <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-6 text-center text-xs text-slate-600">
-                      Awaiting candidate setups to trigger Chief Quantitative Risk Officer audits.
+                    <div className="flex-1 p-5 flex items-center justify-center bg-slate-50/50 m-4 border border-dashed border-slate-200 rounded text-center">
+                      <p className="text-xs text-textMuted max-w-sm">
+                        Awaiting candidate setups to trigger Chief Quantitative Risk Officer audits.
+                      </p>
                     </div>
                   ) : (
-                    <div className="space-y-2.5">
+                    <div className="p-4 space-y-2">
                       {recentAudits.slice(0, 3).map((a) => {
                         const isVetoed = a.veto_triggered || a.total_score < (config?.min_score || 75);
                         return (
                           <div
                             key={a.id}
-                            className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs"
+                            className="flex items-center justify-between p-3 rounded border border-border bg-slate-50/50 hover:bg-slate-50 transition-colors"
                           >
-                            <div className="flex items-center gap-2.5">
+                            <div className="flex items-center space-x-3">
                               <span
-                                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
                                   isVetoed
-                                    ? "bg-rose-100 text-rose-800 border border-rose-200"
-                                    : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
                                 }`}
                               >
                                 {isVetoed ? "VETOED" : "PASSED"}
                               </span>
                               <div>
-                                <div className="font-bold text-slate-900">
+                                <p className="text-xs font-semibold text-textMain">
                                   {a.symbol} ({a.proposed_direction})
-                                </div>
-                                <div className="text-[10px] text-slate-600 truncate max-w-[180px]">
-                                  {a.strategy_name}
-                                </div>
+                                </p>
+                                <p className="text-[10px] text-textMuted truncate max-w-[200px]">{a.strategy_name}</p>
                               </div>
                             </div>
-
                             <div className="text-right">
-                              <span className="font-mono font-extrabold text-sm text-slate-900">{a.total_score}</span>
-                              <span className="text-[10px] text-slate-600">/100</span>
+                              <span className="text-sm font-bold tabular-nums text-textMain">{a.total_score}</span>
+                              <span className="text-[10px] text-textMuted">/100</span>
                             </div>
                           </div>
                         );
@@ -1234,203 +1171,173 @@ export default function CommandCenterPage() {
                 </div>
               </div>
 
-              {/* PANEL 3: BREAKING NEWS & MACRO RADAR */}
-              <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card">
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                      <Newspaper className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-sm text-slate-900">
-                        Market Catalysts &amp; Macro Radar
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Live headlines and high-impact economic calendar events synced to database
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
+              {/* BOTTOM SECTION (Market Catalysts & Macro Radar) */}
+              <div className="bg-surface border border-border rounded-lg">
+                <div className="px-5 py-4 border-b border-border flex justify-between items-center">
+                  <h3 className="text-sm font-semibold flex items-center">
+                    <Radar className="w-4 h-4 mr-2 text-brand-500" /> Market Catalysts &amp; Macro Radar
+                  </h3>
+                  <div className="flex space-x-2">
                     <button
                       onClick={() => fetchNewsFromApi(true)}
                       disabled={isSyncingNews}
-                      className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50 cursor-pointer"
-                      title="Sync Latest News"
+                      className="flex items-center px-3 py-1.5 text-xs font-medium border border-border text-textMain hover:bg-slate-50 rounded transition-colors cursor-pointer disabled:opacity-50"
                     >
-                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingNews ? "animate-spin text-indigo-600" : ""}`} />
+                      <RefreshCw className={`w-3 h-3 mr-1.5 ${isSyncingNews ? "animate-spin text-brand-600" : ""}`} />
                       <span>{isSyncingNews ? "Syncing..." : "Sync News"}</span>
                     </button>
-
                     <button
                       onClick={() => setActiveSection("news")}
-                      className="flex items-center gap-1 rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer"
+                      className="flex items-center px-3 py-1.5 text-xs font-medium bg-brand-50 text-brand-600 border border-brand-100 hover:bg-brand-100 rounded transition-colors cursor-pointer"
                     >
                       <span>Full News Desk</span>
-                      <ChevronRight className="h-3 w-3" />
+                      <ArrowRight className="w-3 h-3 ml-1.5" />
                     </button>
                   </div>
                 </div>
 
-                {newsItems.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center">
-                    <Newspaper className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-                    <p className="text-xs font-semibold text-slate-600">No news articles in database yet.</p>
-                    <button
-                      onClick={() => fetchNewsFromApi(true)}
-                      className="mt-3 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 cursor-pointer"
-                    >
-                      Fetch &amp; Sync Now
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {newsItems.slice(0, 4).map((item, idx) => (
-                      <a
-                        key={item.id || idx}
-                        href={item.url || "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group flex flex-col justify-between rounded-xl border border-slate-100 bg-slate-50/60 p-4 transition-all hover:border-indigo-200 hover:bg-white hover:shadow-xs"
-                      >
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-[10px] gap-2">
-                            <span
-                              className={`rounded-md px-1.5 py-0.5 font-bold uppercase tracking-wider ${
-                                item.coin === "BTC"
-                                  ? "bg-amber-100 text-amber-800 border border-amber-200"
-                                  : item.coin === "ETH"
-                                  ? "bg-indigo-100 text-indigo-800 border border-indigo-200"
-                                  : item.coin === "SOL"
-                                  ? "bg-teal-100 text-teal-800 border border-teal-200"
-                                  : "bg-rose-100 text-rose-800 border border-rose-200"
-                              }`}
-                            >
-                              {item.coin || "CRYPTO"}
-                            </span>
+                {/* News List */}
+                <div className="divide-y divide-border">
+                  {newsItems.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-textMuted">
+                      No news synced yet. Click &quot;Sync News&quot; above to populate the database.
+                    </div>
+                  ) : (
+                    newsItems.slice(0, 5).map((item, idx) => {
+                      const sentiment = (item.sentiment || "NEUTRAL").toUpperCase();
+                      const isBull = sentiment === "BULLISH";
+                      const isBear = sentiment === "BEARISH";
+                      const coin = item.coin || (item.category === "macro" ? "USD" : "CRYPTO");
 
-                            <span
-                              className={`rounded-md px-1.5 py-0.5 font-bold ${
-                                item.sentiment === "BULLISH"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : item.sentiment === "BEARISH"
-                                  ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                  : "bg-slate-100 text-slate-600 border border-slate-200"
+                      return (
+                        <div
+                          key={item.id || idx}
+                          className="px-5 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center space-x-4 min-w-0 mr-4">
+                            <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
+                              {coin}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-textMain truncate">{item.title}</p>
+                              <p className="text-[11px] text-textMuted mt-0.5">{item.source}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-6 shrink-0">
+                            <div
+                              className={`flex items-center text-[11px] font-medium ${
+                                isBull ? "text-emerald-600" : isBear ? "text-rose-600" : "text-slate-500"
                               }`}
                             >
-                              {item.sentiment || "NEUTRAL"}
+                              <div
+                                className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                                  isBull ? "bg-emerald-500" : isBear ? "bg-rose-500" : "bg-slate-400"
+                                }`}
+                              />
+                              <span>{sentiment}</span>
+                            </div>
+                            <span className="text-[11px] text-textMuted flex items-center w-20 justify-end">
+                              <Clock className="w-3 h-3 mr-1" />
+                              {formatTimeAgo(item.published_at)}
                             </span>
                           </div>
-
-                          <h4 className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition-colors line-clamp-2">
-                            {item.title}
-                          </h4>
                         </div>
-
-                        <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 border-t border-slate-100/80 pt-2">
-                          <span className="font-medium text-slate-600">{item.source}</span>
-                          <span className="flex items-center gap-1 font-mono text-[10px]">
-                            <Clock className="h-3 w-3 text-slate-400" />
-                            {formatTimeAgo(item.published_at)}
-                          </span>
-                        </div>
-                      </a>
-                    ))}
-                  </div>
-                )}
+                      );
+                    })
+                  )}
+                </div>
               </div>
+
+              {/* Spacer for bottom padding */}
+              <div className="h-4"></div>
             </div>
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 2: LIVE OPEN POSITIONS */}
+          {/* TAB 2: LIVE POSITIONS DESK */}
           {/* ========================================================================= */}
           {activeSection === "positions" && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <Layers className="h-5 w-5 text-cyan-600" />
-                    <span>Institutional Positions Ledger ({openTrades.length})</span>
-                  </h2>
-                  <p className="text-xs text-slate-600">
+                  <h2 className="text-xl font-semibold tracking-tight">Institutional Positions Ledger</h2>
+                  <p className="text-xs text-textMuted mt-0.5">
                     Active server-side conditional trades protected on Binance Futures with trailing telemetry
                   </p>
                 </div>
                 <button
                   onClick={fetchAllData}
-                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs transition-colors"
+                  className="flex items-center px-3 py-1.5 text-xs font-medium border border-border text-textMain hover:bg-slate-50 rounded transition-colors cursor-pointer"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Refresh Orders</span>
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Refresh Orders
                 </button>
               </div>
 
               {openTrades.length === 0 ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center shadow-card">
+                <div className="bg-surface border border-border rounded-lg p-12 text-center">
                   <Layers className="mx-auto h-8 w-8 text-slate-300 mb-2" />
-                  <h4 className="text-sm font-bold text-slate-800">No Open Positions</h4>
-                  <p className="text-xs text-slate-600 mt-1">
+                  <h4 className="text-sm font-semibold text-textMain">No Open Positions</h4>
+                  <p className="text-xs text-textMuted mt-1">
                     The autonomous bot is actively scanning 15m candles for SMC sweeps and EMA pullbacks.
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-card">
-                  <table className="w-full text-left text-xs font-mono">
-                    <thead className="border-b border-slate-100 bg-slate-50/70 text-slate-600 uppercase font-semibold tracking-wider font-sans">
+                <div className="overflow-x-auto bg-surface border border-border rounded-lg">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-border bg-slate-50 text-textMuted uppercase font-semibold text-[10px] tracking-wider">
                       <tr>
-                        <th className="py-3.5 px-4">Symbol / Strategy</th>
-                        <th className="py-3.5 px-4 text-center">Direction</th>
-                        <th className="py-3.5 px-4 text-right">Entry Price</th>
-                        <th className="py-3.5 px-4 text-right">Stop Loss</th>
-                        <th className="py-3.5 px-4 text-right">Take Profit</th>
-                        <th className="py-3.5 px-4 text-center">Live R / MFE</th>
-                        <th className="py-3.5 px-4 text-center">Protection Status</th>
-                        <th className="py-3.5 px-4 text-center">Hold Duration</th>
+                        <th className="py-3 px-4">Symbol / Strategy</th>
+                        <th className="py-3 px-4 text-center">Direction</th>
+                        <th className="py-3 px-4 text-right">Entry Price</th>
+                        <th className="py-3 px-4 text-right">Stop Loss</th>
+                        <th className="py-3 px-4 text-right">Take Profit</th>
+                        <th className="py-3 px-4 text-center">Live R / MFE</th>
+                        <th className="py-3 px-4 text-center">Protection Status</th>
+                        <th className="py-3 px-4 text-center">Hold Duration</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-border">
                       {openTrades.map((t) => (
-                        <tr key={t.id} className="hover:bg-slate-50/70 transition-colors">
+                        <tr key={t.id} className="hover:bg-slate-50 transition-colors">
                           <td className="py-3.5 px-4">
-                            <div className="font-sans font-bold text-slate-900">{t.symbol}</div>
-                            <div className="text-[10px] text-indigo-600 font-sans">{t.strategy_name}</div>
+                            <div className="font-semibold text-textMain">{t.symbol}</div>
+                            <div className="text-[10px] text-brand-600">{t.strategy_name}</div>
                           </td>
                           <td className="py-3.5 px-4 text-center">
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-sans font-extrabold ${
+                              className={`rounded px-2 py-0.5 text-[10px] font-bold border ${
                                 t.side === "LONG"
-                                  ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                                  : "bg-rose-100 text-rose-800 border border-rose-200"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : "bg-rose-50 text-rose-700 border-rose-200"
                               }`}
                             >
                               {t.side}
                             </span>
                           </td>
-                          <td className="py-3.5 px-4 text-right text-slate-900 font-bold">
+                          <td className="py-3.5 px-4 text-right text-textMain font-semibold tabular-nums">
                             ${Number(t.entry_price).toFixed(4)}
                           </td>
-                          <td className="py-3.5 px-4 text-right text-rose-600 font-bold">
+                          <td className="py-3.5 px-4 text-right text-rose-600 font-semibold tabular-nums">
                             ${Number(t.stop_loss).toFixed(4)}
                           </td>
-                          <td className="py-3.5 px-4 text-right text-emerald-600 font-bold">
+                          <td className="py-3.5 px-4 text-right text-emerald-600 font-semibold tabular-nums">
                             ${Number(t.take_profit).toFixed(4)}
                           </td>
-                          <td className="py-3.5 px-4 text-center">
-                            <div className="font-bold text-slate-900">MFE: +{Number(t.mfe_r || 0).toFixed(2)}R</div>
-                            <div className="text-[10px] text-slate-600">MAE: {Number(t.mae_r || 0).toFixed(2)}R</div>
+                          <td className="py-3.5 px-4 text-center tabular-nums">
+                            <div className="font-semibold text-textMain">MFE: +{Number(t.mfe_r || 0).toFixed(2)}R</div>
+                            <div className="text-[10px] text-textMuted">MAE: {Number(t.mae_r || 0).toFixed(2)}R</div>
                           </td>
                           <td className="py-3.5 px-4 text-center">
                             {t.breakeven_activated ? (
-                              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-sans font-bold text-emerald-800">
+                              <span className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
                                 <ShieldCheck className="h-3 w-3 text-emerald-600" />
-                                RISK-FREE (+1R BE LOCKED)
+                                RISK-FREE (+1R BE)
                               </span>
                             ) : (
-                              <span className="text-slate-600 text-[10px] font-sans">Open Risk Active</span>
+                              <span className="text-textMuted text-[10px]">Open Risk Active</span>
                             )}
                           </td>
-                          <td className="py-3.5 px-4 text-center font-sans text-xs text-slate-600">
+                          <td className="py-3.5 px-4 text-center text-xs text-textMuted">
                             <div className="flex items-center justify-center gap-1">
                               <Clock className="h-3.5 w-3.5 text-slate-400" />
                               <span>Max {config?.max_hold_bars || 20} Bars</span>
@@ -1446,30 +1353,26 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 3: STRATEGY PERFORMANCE LEADERBOARD */}
+          {/* TAB 3: STRATEGY PERFORMANCE LEADERBOARD */}
           {/* ========================================================================= */}
           {activeSection === "strategies" && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5 text-emerald-600" />
-                    <span>Strategy Performance Leaderboard</span>
-                  </h2>
-                  <p className="text-xs text-slate-600">
+                  <h2 className="text-xl font-semibold tracking-tight">Strategy Performance Leaderboard</h2>
+                  <p className="text-xs text-textMuted mt-0.5">
                     Aggregated in real-time from PostgreSQL view <code>strategy_performance_view</code>
                   </p>
                 </div>
                 <button
                   onClick={fetchAllData}
-                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs transition-colors"
+                  className="flex items-center px-3 py-1.5 text-xs font-medium border border-border text-textMain hover:bg-slate-50 rounded transition-colors cursor-pointer"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  <span>Refresh View</span>
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Refresh View
                 </button>
               </div>
 
-              {/* Comparative Visualizer Cards */}
+              {/* 4 Cards Summary */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 {ALL_STRATEGIES.map((name) => {
                   const row = perfView.find((p) => p.strategy_name === name);
@@ -1477,19 +1380,15 @@ export default function CommandCenterPage() {
                   const pf = Number(row?.profit_factor || 0);
 
                   return (
-                    <div key={name} className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-card">
+                    <div key={name} className="bg-surface border border-border rounded-lg p-4 flex flex-col justify-between">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] font-bold text-slate-900 truncate">{name}</span>
-                        <span
-                          className={`h-2 w-2 rounded-full ${
-                            isEnabled ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
-                          }`}
-                        />
+                        <span className="text-xs font-semibold text-textMain truncate">{name}</span>
+                        <span className={`h-2 w-2 rounded-full ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
                       </div>
-                      <div className="text-xl font-extrabold font-mono text-slate-900">
+                      <div className="text-2xl font-bold tabular-nums text-textMain">
                         {Number(row?.win_rate_pct || 0).toFixed(1)}%
                       </div>
-                      <div className="mt-1 flex items-center justify-between text-xs text-slate-600">
+                      <div className="mt-2 flex items-center justify-between text-xs text-textMuted tabular-nums">
                         <span>PF: {pf.toFixed(2)}</span>
                         <span>{row?.closed_trades || 0} Trades</span>
                       </div>
@@ -1499,20 +1398,20 @@ export default function CommandCenterPage() {
               </div>
 
               {/* Leaderboard Table */}
-              <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-card">
+              <div className="overflow-x-auto bg-surface border border-border rounded-lg">
                 <table className="w-full text-left text-xs">
-                  <thead className="border-b border-slate-100 bg-slate-50/70 text-slate-600 uppercase font-semibold tracking-wider">
+                  <thead className="border-b border-border bg-slate-50 text-textMuted uppercase font-semibold text-[10px] tracking-wider">
                     <tr>
-                      <th className="py-3.5 px-4">Strategy Plugin</th>
-                      <th className="py-3.5 px-4 text-center">Status</th>
-                      <th className="py-3.5 px-4 text-center">Closed (W / L)</th>
-                      <th className="py-3.5 px-4 text-center">Win Rate</th>
-                      <th className="py-3.5 px-4 text-center">Profit Factor</th>
-                      <th className="py-3.5 px-4 text-center">Avg R-Multiple</th>
-                      <th className="py-3.5 px-4 text-right">Net P&L (USDT)</th>
+                      <th className="py-3 px-4">Strategy Plugin</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-center">Closed (W / L)</th>
+                      <th className="py-3 px-4 text-center">Win Rate</th>
+                      <th className="py-3 px-4 text-center">Profit Factor</th>
+                      <th className="py-3 px-4 text-center">Avg R-Multiple</th>
+                      <th className="py-3 px-4 text-right">Net P&amp;L (USDT)</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 font-mono">
+                  <tbody className="divide-y divide-border tabular-nums">
                     {ALL_STRATEGIES.map((stratName) => {
                       const row = perfView.find((p) => p.strategy_name === stratName) || {
                         strategy_name: stratName,
@@ -1530,44 +1429,40 @@ export default function CommandCenterPage() {
                       const pf = Number(row.profit_factor || 0);
 
                       let pfBadgeColor = "text-slate-600 bg-slate-100 border-slate-200";
-                      if (pf >= 1.5) pfBadgeColor = "text-emerald-800 bg-emerald-50 border-emerald-200";
-                      else if (pf >= 1.0) pfBadgeColor = "text-amber-800 bg-amber-50 border-amber-200";
-                      else if (row.closed_trades > 0) pfBadgeColor = "text-rose-800 bg-rose-50 border-rose-200";
+                      if (pf >= 1.5) pfBadgeColor = "text-emerald-700 bg-emerald-50 border-emerald-200";
+                      else if (pf >= 1.0) pfBadgeColor = "text-amber-700 bg-amber-50 border-amber-200";
+                      else if (row.closed_trades > 0) pfBadgeColor = "text-rose-700 bg-rose-50 border-rose-200";
 
                       return (
-                        <tr key={stratName} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="py-3.5 px-4 font-sans font-bold text-slate-900 flex items-center gap-2">
-                            <span
-                              className={`h-2 w-2 rounded-full ${
-                                isEnabled ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
-                              }`}
-                            />
+                        <tr key={stratName} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-3.5 px-4 font-semibold text-textMain flex items-center gap-2">
+                            <span className={`h-2 w-2 rounded-full ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
                             <span>{stratName}</span>
                           </td>
                           <td className="py-3.5 px-4 text-center">
                             <button
                               onClick={() => toggleStrategyActive(stratName)}
-                              className={`rounded-lg px-2.5 py-1 text-[11px] font-sans font-bold border transition-all ${
+                              className={`rounded px-2.5 py-1 text-[11px] font-semibold border transition-all cursor-pointer ${
                                 isEnabled
-                                  ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-slate-900"
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                  : "border-slate-200 bg-slate-100 text-slate-600 hover:text-textMain"
                               }`}
                             >
                               {isEnabled ? "ACTIVE" : "PAUSED"}
                             </button>
                           </td>
-                          <td className="py-3.5 px-4 text-center text-slate-700">
+                          <td className="py-3.5 px-4 text-center text-textMuted">
                             {row.closed_trades} ({row.wins}W / {row.losses}L)
                           </td>
-                          <td className="py-3.5 px-4 text-center font-bold text-slate-900">
+                          <td className="py-3.5 px-4 text-center font-semibold text-textMain">
                             {Number(row.win_rate_pct || 0).toFixed(1)}%
                           </td>
                           <td className="py-3.5 px-4 text-center">
-                            <span className={`rounded-md border px-2 py-0.5 font-bold ${pfBadgeColor}`}>
+                            <span className={`rounded border px-2 py-0.5 font-bold text-[10px] ${pfBadgeColor}`}>
                               {pf.toFixed(2)}
                             </span>
                           </td>
-                          <td className="py-3.5 px-4 text-center text-slate-700">
+                          <td className="py-3.5 px-4 text-center text-textMuted">
                             {Number(row.avg_r_multiple || 0).toFixed(2)}R
                           </td>
                           <td
@@ -1575,8 +1470,8 @@ export default function CommandCenterPage() {
                               Number(row.net_pnl_usdt || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
                             }`}
                           >
-                            {Number(row.net_pnl_usdt || 0) >= 0 ? "+" : ""}
-                            ${Number(row.net_pnl_usdt || 0).toFixed(2)}
+                            {Number(row.net_pnl_usdt || 0) >= 0 ? "+" : ""}$
+                            {Number(row.net_pnl_usdt || 0).toFixed(2)}
                           </td>
                         </tr>
                       );
@@ -1588,24 +1483,22 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 3: MARKET & MACRO NEWS DESK */}
+          {/* TAB 4: MARKET & MACRO NEWS DESK */}
           {/* ========================================================================= */}
           {activeSection === "news" && (
             <div className="space-y-6">
-              {/* Header Controls */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-surface border border-border rounded-lg p-5">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <Newspaper className="h-5 w-5 text-blue-600" />
+                  <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
+                    <Newspaper className="h-5 w-5 text-brand-500" />
                     <span>Market Catalysts &amp; Macro Intelligence Feed</span>
                   </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Live crypto headlines &amp; high-impact USD economic calendar events synced to Supabase database
+                  <p className="text-xs text-textMuted mt-0.5">
+                    Live crypto headlines &amp; high-impact USD economic calendar events synced to database
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Search Bar */}
                   <div className="relative">
                     <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
                     <input
@@ -1613,7 +1506,7 @@ export default function CommandCenterPage() {
                       placeholder="Search news & events..."
                       value={newsSearchQuery}
                       onChange={(e) => setNewsSearchQuery(e.target.value)}
-                      className="rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:border-indigo-500 focus:outline-hidden w-48 sm:w-60"
+                      className="rounded-md border border-border bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-textMain placeholder-slate-400 focus:bg-white focus:border-brand-500 focus:outline-hidden w-48 sm:w-60"
                     />
                     {newsSearchQuery && (
                       <button
@@ -1625,11 +1518,10 @@ export default function CommandCenterPage() {
                     )}
                   </div>
 
-                  {/* Sync News Button */}
                   <button
                     onClick={() => fetchNewsFromApi(true)}
                     disabled={isSyncingNews}
-                    className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-md bg-brand-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isSyncingNews ? "animate-spin" : ""}`} />
                     <span>{isSyncingNews ? "Syncing..." : "Sync Fresh News"}</span>
@@ -1637,30 +1529,32 @@ export default function CommandCenterPage() {
                 </div>
               </div>
 
-              {/* Category Filter Pills */}
+              {/* Category Pills */}
               <div className="flex flex-wrap items-center gap-2">
                 {[
                   { id: "ALL", label: "All News", count: newsItems.length },
                   { id: "BTC", label: "Bitcoin (BTC)", count: newsItems.filter((n) => n.coin === "BTC").length },
                   { id: "ETH", label: "Ethereum (ETH)", count: newsItems.filter((n) => n.coin === "ETH").length },
                   { id: "SOL", label: "Solana (SOL)", count: newsItems.filter((n) => n.coin === "SOL").length },
-                  { id: "MACRO", label: "USD Macro Calendar", count: newsItems.filter((n) => n.category === "macro" || n.coin === "USD").length },
+                  {
+                    id: "MACRO",
+                    label: "USD Macro Calendar",
+                    count: newsItems.filter((n) => n.category === "macro" || n.coin === "USD").length,
+                  },
                 ].map((cat) => (
                   <button
                     key={cat.id}
                     onClick={() => setSelectedNewsCategory(cat.id)}
-                    className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all border cursor-pointer ${
+                    className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-all border cursor-pointer ${
                       selectedNewsCategory === cat.id
-                        ? "border-indigo-600 bg-indigo-600 text-white shadow-xs"
-                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                        ? "border-brand-600 bg-brand-50 text-brand-600"
+                        : "border-border bg-surface text-textMuted hover:bg-slate-50 hover:text-textMain"
                     }`}
                   >
                     <span>{cat.label}</span>
                     <span
-                      className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono ${
-                        selectedNewsCategory === cat.id
-                          ? "bg-white/20 text-white"
-                          : "bg-slate-100 text-slate-600"
+                      className={`rounded px-1.5 py-0.2 text-[10px] tabular-nums font-bold ${
+                        selectedNewsCategory === cat.id ? "bg-brand-100 text-brand-700" : "bg-slate-100 text-slate-600"
                       }`}
                     >
                       {cat.count}
@@ -1669,114 +1563,69 @@ export default function CommandCenterPage() {
                 ))}
               </div>
 
-              {/* Macro High-Impact Alert Banner */}
-              {newsItems.some((n) => n.category === "macro" || n.impact === "HIGH") && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs">
-                  <div className="flex items-start gap-3">
-                    <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <div className="font-bold text-amber-900">
-                        USD High-Impact Economic Releases Monitored
-                      </div>
-                      <p className="text-amber-800/90 leading-relaxed">
-                        The autonomous engine monitors ForexFactory high-impact events (CPI, FOMC, NFP, Fed Powell). The Macro Shield automatically blocks new trade openings within 30 minutes before or 15 minutes after high-impact releases.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* News Grid Cards */}
+              {/* News Grid */}
               {filteredNews.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-12 text-center">
+                <div className="bg-surface border border-dashed border-border rounded-lg p-12 text-center">
                   <Newspaper className="h-10 w-10 text-slate-300 mx-auto mb-3" />
-                  <h3 className="text-sm font-bold text-slate-800">No news articles found</h3>
-                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    No articles match your selected filter or search query. Click "Sync Fresh News" to fetch latest market updates into the database.
+                  <h3 className="text-sm font-semibold text-textMain">No news articles found</h3>
+                  <p className="text-xs text-textMuted mt-1 max-w-sm mx-auto">
+                    No articles match your selected filter. Click &quot;Sync Fresh News&quot; to fetch latest updates into the database.
                   </p>
-                  <button
-                    onClick={() => {
-                      setSelectedNewsCategory("ALL");
-                      setNewsSearchQuery("");
-                      fetchNewsFromApi(true);
-                    }}
-                    className="mt-4 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 transition-colors shadow-xs cursor-pointer"
-                  >
-                    Reset Filter &amp; Sync News
-                  </button>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {filteredNews.map((item, idx) => {
-                    const isMacro = item.category === "macro" || item.coin === "USD";
+                    const sentiment = (item.sentiment || "NEUTRAL").toUpperCase();
+                    const isBull = sentiment === "BULLISH";
+                    const isBear = sentiment === "BEARISH";
+                    const coin = item.coin || (item.category === "macro" ? "USD" : "CRYPTO");
+
                     return (
                       <div
                         key={item.id || idx}
-                        className="group flex flex-col justify-between rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card hover:shadow-elevated hover:border-indigo-200 transition-all"
+                        className="bg-surface border border-border rounded-lg p-4 flex flex-col justify-between hover:border-brand-500/50 transition-all"
                       >
-                        <div className="space-y-3">
-                          {/* Tags row */}
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5">
-                              <span
-                                className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                  item.coin === "BTC"
-                                    ? "bg-amber-100 text-amber-800 border border-amber-200"
-                                    : item.coin === "ETH"
-                                    ? "bg-indigo-100 text-indigo-800 border border-indigo-200"
-                                    : item.coin === "SOL"
-                                    ? "bg-teal-100 text-teal-800 border border-teal-200"
-                                    : "bg-rose-100 text-rose-800 border border-rose-200"
-                                }`}
-                              >
-                                {item.coin || "CRYPTO"}
-                              </span>
-
-                              {isMacro && (
-                                <span className="rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-[10px] font-bold text-rose-700">
-                                  HIGH IMPACT
-                                </span>
-                              )}
-                            </div>
-
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-200">
+                              {coin}
+                            </span>
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                                item.sentiment === "BULLISH"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : item.sentiment === "BEARISH"
-                                  ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                  : "bg-slate-100 text-slate-600 border border-slate-200"
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                                isBull
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : isBear
+                                  ? "bg-rose-50 text-rose-700 border-rose-200"
+                                  : "bg-slate-100 text-slate-600 border-slate-200"
                               }`}
                             >
-                              {item.sentiment || "NEUTRAL"}
+                              {sentiment}
                             </span>
                           </div>
 
-                          {/* Headline */}
-                          <h3 className="font-bold text-slate-900 text-sm leading-snug group-hover:text-indigo-600 transition-colors line-clamp-3">
+                          <h3 className="font-medium text-textMain text-xs leading-snug line-clamp-3">
                             {item.title}
                           </h3>
                         </div>
 
-                        {/* Footer */}
-                        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs">
-                          <div className="flex items-center gap-2 text-slate-500 text-[11px]">
-                            <span className="font-semibold text-slate-700">{item.source}</span>
-                            <span>•</span>
-                            <span className="font-mono text-[10px]">{formatTimeAgo(item.published_at)}</span>
+                        <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-[11px] text-textMuted">
+                          <span>{item.source}</span>
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {formatTimeAgo(item.published_at)}
+                            </span>
+                            {item.url && item.url !== "#" && (
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-brand-600 hover:text-brand-800 flex items-center"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
                           </div>
-
-                          {item.url && item.url !== "#" && (
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 hover:text-indigo-800 transition-colors"
-                            >
-                              <span>Read</span>
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
                         </div>
                       </div>
                     );
@@ -1787,22 +1636,22 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 4: DEEPSEEK AI AUDIT STREAM */}
+          {/* TAB 5: DEEPSEEK AI AUDIT STREAM */}
           {/* ========================================================================= */}
           {activeSection === "audits" && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Brain className="h-5 w-5 text-violet-600" />
+                <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
+                  <Cpu className="h-5 w-5 text-brand-500" />
                   <span>DeepSeek AI Discrete Rubric Stream</span>
                 </h2>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-textMuted mt-0.5">
                   Pre-execution Chief Quantitative Risk Officer audits with required flaw deductions and discrete scores
                 </p>
               </div>
 
               {recentAudits.length === 0 ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center shadow-card text-xs text-slate-600">
+                <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">
                   Awaiting candidate strategy signals to initiate DeepSeek risk evaluations.
                 </div>
               ) : (
@@ -1814,116 +1663,100 @@ export default function CommandCenterPage() {
                     return (
                       <div
                         key={audit.id}
-                        className={`rounded-2xl border p-5 shadow-card transition-all ${
-                          isVetoed ? "border-rose-200 bg-rose-50/20" : "border-slate-200/90 bg-white"
+                        className={`bg-surface border rounded-lg p-5 transition-all ${
+                          isVetoed ? "border-rose-200" : "border-border"
                         }`}
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
                           <div className="flex items-center gap-3">
                             <span
-                              className={`rounded-md px-2.5 py-0.5 text-xs font-bold ${
+                              className={`rounded px-2.5 py-0.5 text-xs font-bold border ${
                                 audit.proposed_direction === "LONG"
-                                  ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                                  : "bg-rose-100 text-rose-800 border border-rose-200"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : "bg-rose-50 text-rose-700 border-rose-200"
                               }`}
                             >
                               {audit.proposed_direction}
                             </span>
-                            <span className="font-bold text-sm text-slate-900">{audit.symbol}</span>
-                            <span className="text-xs text-indigo-600 font-semibold font-mono">
-                              ({audit.strategy_name})
-                            </span>
+                            <span className="font-semibold text-sm text-textMain">{audit.symbol}</span>
+                            <span className="text-xs text-brand-600 font-mono">({audit.strategy_name})</span>
                           </div>
 
                           <div className="flex items-center gap-3">
                             {isVetoed ? (
-                              <span className="flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-bold text-rose-700">
+                              <span className="flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-bold text-rose-700">
                                 <XCircle className="h-3.5 w-3.5 text-rose-600" />
                                 VETOED / REJECTED
                               </span>
                             ) : (
-                              <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                              <span className="flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
                                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
                                 APPROVED ({audit.total_score}/100)
                               </span>
                             )}
-                            <span className="text-xs text-slate-600">
+                            <span className="text-xs text-textMuted">
                               {new Date(audit.created_at).toLocaleTimeString()}
                             </span>
                           </div>
                         </div>
 
-                        {/* Veto Reason */}
                         {audit.veto_reason && (
-                          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 font-medium">
+                          <div className="mt-3 rounded border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 font-medium">
                             <strong>Kill-Switch Veto Reason:</strong> {audit.veto_reason}
                           </div>
                         )}
 
-                        {/* 5 Discrete Sub-Score Cards */}
                         <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-slate-600 uppercase">HTF Regime</div>
-                            <div className="font-mono font-extrabold text-indigo-700 text-base mt-1">
+                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                            <div className="text-[10px] font-bold text-textMuted uppercase">HTF Regime</div>
+                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
                               {breakdown.htf_regime?.score ?? 0} / 25
                             </div>
-                            <div className="text-[10px] text-slate-600 truncate mt-1">
+                            <div className="text-[10px] text-textMuted truncate mt-1">
                               {breakdown.htf_regime?.flaw_or_deduction || "Aligned"}
                             </div>
                           </div>
 
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-slate-600 uppercase">LTF Location</div>
-                            <div className="font-mono font-extrabold text-indigo-700 text-base mt-1">
+                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                            <div className="text-[10px] font-bold text-textMuted uppercase">LTF Location</div>
+                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
                               {breakdown.ltf_location?.score ?? 0} / 25
                             </div>
-                            <div className="text-[10px] text-slate-600 truncate mt-1">
+                            <div className="text-[10px] text-textMuted truncate mt-1">
                               {breakdown.ltf_location?.flaw_or_deduction || "Verified"}
                             </div>
                           </div>
 
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-slate-600 uppercase">Momentum &amp; Vol</div>
-                            <div className="font-mono font-extrabold text-indigo-700 text-base mt-1">
+                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                            <div className="text-[10px] font-bold text-textMuted uppercase">Momentum &amp; Vol</div>
+                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
                               {breakdown.momentum_volume?.score ?? 0} / 15
                             </div>
-                            <div className="text-[10px] text-slate-600 truncate mt-1">
+                            <div className="text-[10px] text-textMuted truncate mt-1">
                               {breakdown.momentum_volume?.flaw_or_deduction || "Clean"}
                             </div>
                           </div>
 
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-slate-600 uppercase">News Catalyst</div>
-                            <div className="font-mono font-extrabold text-indigo-700 text-base mt-1">
+                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                            <div className="text-[10px] font-bold text-textMuted uppercase">News Catalyst</div>
+                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
                               {breakdown.news_catalyst?.score ?? 0} / 20
                             </div>
-                            <div className="text-[10px] text-slate-600 truncate mt-1">
+                            <div className="text-[10px] text-textMuted truncate mt-1">
                               {breakdown.news_catalyst?.flaw_or_deduction || "Neutral"}
                             </div>
                           </div>
 
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-slate-600 uppercase">Intermarket Tide</div>
-                            <div className="font-mono font-extrabold text-indigo-700 text-base mt-1">
+                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                            <div className="text-[10px] font-bold text-textMuted uppercase">Intermarket Tide</div>
+                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
                               {breakdown.intermarket_tide?.score ?? 0} / 15
                             </div>
-                            <div className="text-[10px] text-slate-600 truncate mt-1">
+                            <div className="text-[10px] text-textMuted truncate mt-1">
                               {breakdown.intermarket_tide?.flaw_or_deduction || "BTC Flow"}
                             </div>
                           </div>
                         </div>
-
-                        {/* Evaluated News Context */}
-                        {Array.isArray(audit.news_context) && audit.news_context.length > 0 && (
-                          <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-600">
-                            <span className="font-bold text-slate-800">CryptoCompare News Evaluated: </span>
-                            {audit.news_context.map((n: any, idx: number) => (
-                              <span key={idx} className="mr-3">
-                                • {n.title} ({n.published_mins_ago}m ago)
-                              </span>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     );
                   })}
@@ -1933,25 +1766,24 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 5: AUTONOMOUS SELF-IMPROVEMENT & AUTOPSIES */}
+          {/* TAB 6: AUTONOMOUS SELF-IMPROVEMENT & AUTOPSIES */}
           {/* ========================================================================= */}
           {activeSection === "autopsies" && (
             <div className="space-y-6">
-              {/* Header Card with Auto-Apply Mode */}
-              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card">
+              <div className="flex flex-wrap items-center justify-between gap-4 bg-surface border border-border rounded-lg p-6">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <ShieldCheck className="h-5 w-5 text-amber-500" />
+                  <h3 className="text-base font-semibold text-textMain flex items-center gap-2">
+                    <BrainCircuit className="h-5 w-5 text-brand-500" />
                     <span>Autonomous Self-Optimization Engine</span>
                   </h3>
-                  <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
+                  <p className="text-xs text-textMuted mt-1 max-w-2xl leading-relaxed">
                     When enabled, DeepSeek post-mortem forensic lessons automatically quarantine underperforming strategies
                     (Profit Factor &lt; 0.80) and inject verified guardrails directly into live prompt caches.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold text-slate-700">
+                  <span className="text-xs font-semibold text-textMain">
                     {config?.auto_apply_lessons ? "AUTO-APPLY MODE" : "MANUAL APPROVAL MODE"}
                   </span>
                   <button
@@ -1962,8 +1794,8 @@ export default function CommandCenterPage() {
                       await supabase.from("bot_config").update({ auto_apply_lessons: val }).eq("id", 1);
                       showToast(`Optimization mode: ${val ? "AUTO-APPLY" : "MANUAL APPROVAL"}`);
                     }}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      config?.auto_apply_lessons ? "bg-indigo-600" : "bg-slate-300"
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                      config?.auto_apply_lessons ? "bg-brand-600" : "bg-slate-300"
                     }`}
                   >
                     <span
@@ -1977,12 +1809,12 @@ export default function CommandCenterPage() {
 
               {/* Guardrails Queue */}
               <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3">
                   Discovered Guardrail Rules &amp; Weaknesses Queue ({lessons.length})
                 </h4>
 
                 {lessons.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-xs text-slate-600 shadow-card">
+                  <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">
                     Zero weaknesses detected. Clean historical execution observed by the forensic analyst.
                   </div>
                 ) : (
@@ -1990,19 +1822,19 @@ export default function CommandCenterPage() {
                     {lessons.map((lesson) => (
                       <div
                         key={lesson.id}
-                        className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card flex flex-col justify-between"
+                        className="bg-surface border border-border rounded-lg p-5 flex flex-col justify-between"
                       >
                         <div>
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
-                            <span className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700 font-mono">
+                          <div className="flex items-center justify-between border-b border-border pb-2 mb-3">
+                            <span className="rounded border border-brand-100 bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-600 font-mono">
                               {lesson.strategy_name} ({lesson.symbol})
                             </span>
                             <span
-                              className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                              className={`rounded px-2 py-0.5 text-[10px] font-bold ${
                                 lesson.status === "ACTIVE"
-                                  ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                                  ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
                                   : lesson.status === "PENDING"
-                                  ? "bg-amber-50 border border-amber-200 text-amber-800"
+                                  ? "bg-amber-50 border border-amber-200 text-amber-700"
                                   : "bg-slate-100 text-slate-600"
                               }`}
                             >
@@ -2010,29 +1842,29 @@ export default function CommandCenterPage() {
                             </span>
                           </div>
 
-                          <div className="text-xs font-bold text-slate-900 mb-1">
+                          <div className="text-xs font-semibold text-textMain mb-1">
                             Weakness: <span className="text-rose-600">{lesson.weakness_detected}</span>
                           </div>
-                          <div className="text-xs text-slate-700 mb-2 leading-relaxed">
-                            <strong>Prompt Guardrail Rule:</strong> <em>"{lesson.prompt_guardrail_rule}"</em>
+                          <div className="text-xs text-textMuted mb-2 leading-relaxed">
+                            <strong>Prompt Guardrail Rule:</strong> <em>&quot;{lesson.prompt_guardrail_rule}&quot;</em>
                           </div>
-                          <div className="text-[11px] text-indigo-600 font-mono mb-3">
+                          <div className="text-[11px] text-brand-600 font-mono mb-3">
                             Suggested Param: {lesson.suggested_param_key} = {JSON.stringify(lesson.suggested_param_value)} (
                             {lesson.win_rate_impact})
                           </div>
                         </div>
 
                         {lesson.status === "PENDING" && (
-                          <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                          <div className="flex items-center gap-2 pt-3 border-t border-border">
                             <button
                               onClick={() => handleLessonAction(lesson.id, "ACTIVE")}
-                              className="flex-1 rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white hover:bg-indigo-700 transition-all cursor-pointer shadow-xs"
+                              className="flex-1 rounded-md bg-brand-600 py-2 text-xs font-bold text-white hover:bg-brand-700 transition-all cursor-pointer"
                             >
                               Approve &amp; Inject Rule
                             </button>
                             <button
                               onClick={() => handleLessonAction(lesson.id, "DISMISSED")}
-                              className="rounded-xl border border-slate-200 bg-slate-100 py-2 px-3 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors"
+                              className="rounded-md border border-border bg-slate-50 py-2 px-3 text-xs font-medium text-textMuted hover:text-textMain transition-colors cursor-pointer"
                             >
                               Dismiss
                             </button>
@@ -2046,12 +1878,12 @@ export default function CommandCenterPage() {
 
               {/* Autopsies Feed */}
               <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-textMuted mb-3">
                   Forensic Autopsies (Stopped-Out Trades)
                 </h4>
 
                 {autopsies.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-xs text-slate-600 shadow-card">
+                  <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">
                     No losing trade autopsies recorded yet.
                   </div>
                 ) : (
@@ -2059,22 +1891,22 @@ export default function CommandCenterPage() {
                     {autopsies.map((a) => (
                       <div
                         key={a.id}
-                        className="rounded-2xl border border-rose-100 bg-white p-4 shadow-card text-xs leading-relaxed"
+                        className="bg-surface border border-rose-200 rounded-lg p-4 text-xs leading-relaxed"
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 mb-2">
-                          <div className="flex items-center gap-2 font-bold text-slate-900">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2 mb-2">
+                          <div className="flex items-center gap-2 font-semibold text-textMain">
                             <span>Trade #{a.trade_id}</span>
-                            <span className="font-mono text-indigo-600">{a.symbol}</span>
-                            <span className="text-slate-600">({a.strategy_name})</span>
+                            <span className="font-mono text-brand-600">{a.symbol}</span>
+                            <span className="text-textMuted">({a.strategy_name})</span>
                           </div>
-                          <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-800">
+                          <span className="rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700">
                             {a.failure_category}
                           </span>
                         </div>
-                        <p className="text-slate-700 mb-1.5">
+                        <p className="text-textMain mb-1.5">
                           <strong>Root Cause Analysis:</strong> {a.root_cause_analysis}
                         </p>
-                        <p className="text-indigo-600 font-semibold">
+                        <p className="text-brand-600 font-semibold">
                           <strong>Recommended Adjustment:</strong> {a.recommended_rule_adjustment}
                         </p>
                       </div>
@@ -2086,30 +1918,30 @@ export default function CommandCenterPage() {
           )}
 
           {/* ========================================================================= */}
-          {/* SECTION 6: QUANTITATIVE RISK & API CONTROLS */}
+          {/* TAB 7: QUANTITATIVE RISK & BOT SETTINGS */}
           {/* ========================================================================= */}
           {activeSection === "settings" && (
             <form onSubmit={handleSaveSettings} className="space-y-6 max-w-4xl">
               <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Sliders className="h-5 w-5 text-indigo-600" />
+                <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
+                  <SlidersHorizontal className="h-5 w-5 text-brand-500" />
                   <span>Risk, Execution &amp; API Settings Control</span>
                 </h2>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-textMuted mt-0.5">
                   Quantitative risk parameters synchronized directly with Contabo VPS Python trading worker
                 </p>
               </div>
 
               {/* Guardrails Card */}
-              <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card space-y-6">
-                <h3 className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-2">
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
                   <Shield className="h-4 w-4" />
                   <span>Quantitative Risk Guardrails</span>
                 </h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-textMain mb-1">
                       Risk Per Trade: {(Number(formSettings.risk_pct || 0.01) * 100).toFixed(2)}%
                     </label>
                     <input
@@ -2119,13 +1951,13 @@ export default function CommandCenterPage() {
                       step="0.0025"
                       value={formSettings.risk_pct || 0.01}
                       onChange={(e) => setFormSettings({ ...formSettings, risk_pct: parseFloat(e.target.value) })}
-                      className="w-full accent-indigo-600"
+                      className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-slate-600">Range: 0.25% to 2.0%</span>
+                    <span className="text-[10px] text-textMuted">Range: 0.25% to 2.0%</span>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-textMain mb-1">
                       Min DeepSeek Score: {formSettings.min_score || 75}
                     </label>
                     <input
@@ -2135,13 +1967,13 @@ export default function CommandCenterPage() {
                       step="1"
                       value={formSettings.min_score || 75}
                       onChange={(e) => setFormSettings({ ...formSettings, min_score: parseInt(e.target.value) })}
-                      className="w-full accent-indigo-600"
+                      className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-slate-600">Range: 70 to 95 Points</span>
+                    <span className="text-[10px] text-textMuted">Range: 70 to 95 Points</span>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-textMain mb-1">
                       Min Relative Volume RVOL: {formSettings.min_rvol || 1.2}x
                     </label>
                     <input
@@ -2151,15 +1983,15 @@ export default function CommandCenterPage() {
                       step="0.1"
                       value={formSettings.min_rvol || 1.2}
                       onChange={(e) => setFormSettings({ ...formSettings, min_rvol: parseFloat(e.target.value) })}
-                      className="w-full accent-indigo-600"
+                      className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-slate-600">Range: 0.8x to 2.5x</span>
+                    <span className="text-[10px] text-textMuted">Range: 0.8x to 2.5x</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-slate-100">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-border">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-semibold text-textMain mb-1.5">
                       Max Directional Exposure Pct
                     </label>
                     <input
@@ -2169,26 +2001,26 @@ export default function CommandCenterPage() {
                       onChange={(e) =>
                         setFormSettings({ ...formSettings, max_directional_exposure_pct: parseFloat(e.target.value) })
                       }
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs text-slate-900 font-mono focus:border-indigo-500 focus:bg-white focus:outline-none"
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                     />
-                    <span className="text-[10px] text-slate-600">Default: 0.015 (1.5%)</span>
+                    <span className="text-[10px] text-textMuted">Default: 0.015 (1.5%)</span>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-semibold text-textMain mb-1.5">
                       Max Hold Bars (Time-Stop)
                     </label>
                     <input
                       type="number"
                       value={formSettings.max_hold_bars || 20}
                       onChange={(e) => setFormSettings({ ...formSettings, max_hold_bars: parseInt(e.target.value) })}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs text-slate-900 font-mono focus:border-indigo-500 focus:bg-white focus:outline-none"
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                     />
-                    <span className="text-[10px] text-slate-600">15m bars before exit if &lt;0.5R</span>
+                    <span className="text-[10px] text-textMuted">15m bars before exit if &lt;0.5R</span>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    <label className="block text-xs font-semibold text-textMain mb-1.5">
                       Max Funding Rate Pct
                     </label>
                     <input
@@ -2198,22 +2030,22 @@ export default function CommandCenterPage() {
                       onChange={(e) =>
                         setFormSettings({ ...formSettings, max_funding_rate_pct: parseFloat(e.target.value) })
                       }
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 text-xs text-slate-900 font-mono focus:border-indigo-500 focus:bg-white focus:outline-none"
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                     />
-                    <span className="text-[10px] text-slate-600">Filter crowded positioning</span>
+                    <span className="text-[10px] text-textMuted">Filter crowded positioning</span>
                   </div>
                 </div>
 
                 {/* Feature Toggles */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-slate-100">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-border">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={formSettings.enable_breakeven_partial ?? true}
                       onChange={(e) => setFormSettings({ ...formSettings, enable_breakeven_partial: e.target.checked })}
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-0"
+                      className="h-4 w-4 rounded border-border text-brand-600 focus:ring-0"
                     />
-                    <span className="text-xs font-semibold text-slate-700">+1.0R Partial &amp; BE Lock</span>
+                    <span className="text-xs font-medium text-textMain">+1.0R Partial &amp; BE Lock</span>
                   </label>
 
                   <label className="flex items-center gap-3 cursor-pointer">
@@ -2221,9 +2053,9 @@ export default function CommandCenterPage() {
                       type="checkbox"
                       checked={formSettings.use_limit_maker_entry ?? true}
                       onChange={(e) => setFormSettings({ ...formSettings, use_limit_maker_entry: e.target.checked })}
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-0"
+                      className="h-4 w-4 rounded border-border text-brand-600 focus:ring-0"
                     />
-                    <span className="text-xs font-semibold text-slate-700">Limit Maker (GTX)</span>
+                    <span className="text-xs font-medium text-textMain">Limit Maker (GTX)</span>
                   </label>
 
                   <label className="flex items-center gap-3 cursor-pointer">
@@ -2231,16 +2063,16 @@ export default function CommandCenterPage() {
                       type="checkbox"
                       checked={formSettings.telegram_notifications ?? true}
                       onChange={(e) => setFormSettings({ ...formSettings, telegram_notifications: e.target.checked })}
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-0"
+                      className="h-4 w-4 rounded border-border text-brand-600 focus:ring-0"
                     />
-                    <span className="text-xs font-semibold text-slate-700">Telegram Push Alerts</span>
+                    <span className="text-xs font-medium text-textMain">Telegram Push Alerts</span>
                   </label>
                 </div>
               </div>
 
               {/* Watchlist Symbols */}
-              <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card space-y-3">
-                <h3 className="text-xs font-bold text-indigo-700 uppercase tracking-wider">
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-3">
+                <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider">
                   Watchlist Symbols (Binance USDT-M Futures)
                 </h3>
                 <input
@@ -2253,18 +2085,18 @@ export default function CommandCenterPage() {
                     })
                   }
                   placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 px-4 text-xs text-slate-900 font-mono focus:border-indigo-500 focus:bg-white focus:outline-none"
+                  className="w-full rounded-md border border-border bg-slate-50 py-2.5 px-4 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                 />
-                <span className="text-[10px] text-slate-600">Comma-separated ccxt pair identifiers.</span>
+                <span className="text-[10px] text-textMuted">Comma-separated ccxt pair identifiers.</span>
               </div>
 
               {/* Encrypted API Keys */}
-              <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-card space-y-4">
-                <h3 className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-2">
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-4">
+                <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
                   <Shield className="h-4 w-4" />
                   <span>Encrypted API Key Overrides</span>
                 </h3>
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-textMuted">
                   Leave empty to fallback to container environment variables. Values entered here take immediate precedence.
                 </p>
 
@@ -2278,19 +2110,19 @@ export default function CommandCenterPage() {
                   const isVisible = showSecretKeys[key];
                   return (
                     <div key={key}>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">{label}</label>
+                      <label className="block text-xs font-medium text-textMain mb-1">{label}</label>
                       <div className="relative">
                         <input
                           type={isVisible ? "text" : "password"}
                           value={(formSettings as any)[key] || ""}
                           onChange={(e) => setFormSettings({ ...formSettings, [key]: e.target.value })}
                           placeholder="••••••••••••••••"
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 px-3 pr-10 text-xs text-slate-900 font-mono focus:border-indigo-500 focus:bg-white focus:outline-none"
+                          className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                         />
                         <button
                           type="button"
                           onClick={() => setShowSecretKeys({ ...showSecretKeys, [key]: !isVisible })}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                         >
                           {isVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
@@ -2305,7 +2137,7 @@ export default function CommandCenterPage() {
                 <button
                   type="submit"
                   disabled={isSavingConfig}
-                  className="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-700 focus:outline-none disabled:opacity-50 transition-all cursor-pointer"
+                  className="rounded-md bg-brand-600 px-6 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-brand-700 disabled:opacity-50 transition-all cursor-pointer"
                 >
                   {isSavingConfig ? "Saving Changes..." : "Save Quantitative Configuration"}
                 </button>
@@ -2313,7 +2145,7 @@ export default function CommandCenterPage() {
             </form>
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

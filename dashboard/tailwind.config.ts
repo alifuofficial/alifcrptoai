@@ -11,17 +11,20 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "#f8fafc", // slate-50
+        background: "#f8fafc",
         surface: "#ffffff",
         card: "#ffffff",
-        border: "#e2e8f0", // slate-200
-        muted: "#64748b", // slate-500
+        border: "#e2e8f0",
+        textMain: "#0f172a",
+        textMuted: "#64748b",
+        muted: "#64748b",
         brand: {
-          50: "#eef2ff",
-          100: "#e0e7ff",
-          500: "#6366f1",
-          600: "#4f46e5",
-          700: "#4338ca",
+          50: "#eff6ff",
+          100: "#dbeafe",
+          500: "#3b82f6",
+          600: "#2563eb",
+          700: "#1d4ed8",
+          900: "#1e3a8a",
         },
       },
       fontFamily: {
