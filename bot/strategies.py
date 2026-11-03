@@ -2,16 +2,21 @@
 alifcrptoai - Quantitative Strategy Plugins & Indicator Engine
 Author & Developer: Alifu Haji (Individual Developer)
 
-Implements 4 institutional quantitative strategies:
+Implements 6 institutional quantitative strategies:
 1. SMC_Liquidity_Sweep (15-bar high/low sweep + displacement reclaim + FVG)
-2. EMA_Trend_Pullback (EMA 20/50 dynamic trend bounce/rejection)
-3. BB_Volatility_Breakout (Squeeze compression < 0.025 + RVOL >= 1.4 expansion)
-4. RSI_Divergence_Reversal (Exhaustion < 28 or > 72 + engulfing reclaim)
+2. ICT_OrderBlock_FVG (smartmoneyconcepts: BOS/CHoCH + unmitigated FVG/OB confirmation)
+3. Supertrend_ADX_Momentum (pandas-ta-classic: Supertrend flip + ADX > 25 + RVOL filter)
+4. EMA_Trend_Pullback (EMA 20/50 dynamic trend bounce/rejection)
+5. BB_Volatility_Breakout (Squeeze compression < 0.025 + RVOL >= 1.4 expansion)
+6. RSI_Divergence_Reversal (Exhaustion < 28 or > 72 + engulfing reclaim)
 """
 
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
+
+from smartmoneyconcepts import smc
+import pandas_ta as ta
 
 
 def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -27,7 +32,10 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # Ensure numeric columns
     for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        elif col == "volume" and "vol" in df.columns:
+            df["volume"] = pd.to_numeric(df["vol"], errors="coerce")
 
     # 1. EMAs
     df["ema_20"] = df["close"].ewm(span=20, adjust=False).mean()
@@ -88,7 +96,7 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # --- Bullish Sweep Setup ---
     # Price swept below swing_low, but closed back above swing_low with bullish displacement
     if (prev["low"] < swing_low or curr["low"] < swing_low) and curr["close"] > swing_low:
-        if curr["close"] > curr["open"]: # Bullish candle
+        if curr["close"] > curr["open"]:  # Bullish candle
             # Check for bullish FVG (low of bar i > high of bar i-2)
             has_fvg = float(curr["low"]) > float(prev2["high"])
             swept_low = min(float(prev["low"]), float(curr["low"]))
@@ -112,7 +120,7 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # --- Bearish Sweep Setup ---
     # Price swept above swing_high, but closed back below swing_high with bearish displacement
     if (prev["high"] > swing_high or curr["high"] > swing_high) and curr["close"] < swing_high:
-        if curr["close"] < curr["open"]: # Bearish candle
+        if curr["close"] < curr["open"]:  # Bearish candle
             # Check for bearish FVG (high of bar i < low of bar i-2)
             has_fvg = float(curr["high"]) < float(prev2["low"])
             swept_high = max(float(prev["high"]), float(curr["high"]))
@@ -132,6 +140,230 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
+
+    return None
+
+
+def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """
+    ICT Order Block + Fair Value Gap Strategy (smartmoneyconcepts library):
+    1. Detects structural swing points with smc.swing_highs_lows.
+    2. Identifies BOS/CHoCH with smc.bos_choch.
+    3. Finds institutional Order Blocks with smc.ob and FVGs with smc.fvg.
+    4. Triggers LONG if bullish structure break occurred in last 3 bars paired with
+       an unmitigated bullish FVG/OB below current price (SL placed at bottom * 0.997, TP at 2.3R).
+    5. Triggers SHORT if bearish structure break occurred in last 3 bars paired with
+       an unmitigated bearish FVG/OB above current price (SL placed at top * 1.003, TP at 2.3R).
+    """
+    if len(df) < 30:
+        return None
+
+    # Format column names for smartmoneyconcepts library
+    ohlc = df.rename(columns={"vol": "volume"}).copy()
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in ohlc.columns:
+            ohlc[col] = pd.to_numeric(ohlc[col], errors="coerce")
+
+    curr = df.iloc[-1]
+    entry = float(curr["close"])
+    atr = float(curr["atr_14"]) if pd.notnull(curr.get("atr_14")) else float(entry * 0.01)
+    rvol = float(curr["rvol_20"]) if pd.notnull(curr.get("rvol_20")) else 1.0
+
+    try:
+        swings = smc.swing_highs_lows(ohlc, swing_length=10)
+        fvg_data = smc.fvg(ohlc, join_consecutive=True)
+        ob_data = smc.ob(ohlc, swings)
+        try:
+            bos_data = smc.bos_choch(ohlc, swings, close_break=True)
+        except TypeError:
+            bos_data = smc.bos_choch(ohlc, close_break=True)
+    except Exception as exc:
+        # Fallback or pass if calculation error occurs
+        return None
+
+    if bos_data is None or fvg_data is None:
+        return None
+
+    # Check for Bullish BOS or CHoCH in the last 3 bars
+    bullish_structure = False
+    if "BOS" in bos_data.columns and (bos_data["BOS"].iloc[-3:] == 1).any():
+        bullish_structure = True
+    if "CHOCH" in bos_data.columns and (bos_data["CHOCH"].iloc[-3:] == 1).any():
+        bullish_structure = True
+
+    # Check for Bearish BOS or CHoCH in the last 3 bars
+    bearish_structure = False
+    if "BOS" in bos_data.columns and (bos_data["BOS"].iloc[-3:] == -1).any():
+        bearish_structure = True
+    if "CHOCH" in bos_data.columns and (bos_data["CHOCH"].iloc[-3:] == -1).any():
+        bearish_structure = True
+
+    # --- Bullish ICT Setup ---
+    if bullish_structure:
+        support_levels: List[float] = []
+
+        # Check for unmitigated Bullish FVG (FVG == 1) below entry
+        if "FVG" in fvg_data.columns and "Bottom" in fvg_data.columns:
+            fvg_bull = fvg_data[fvg_data["FVG"] == 1]
+            if "MitigatedIndex" in fvg_bull.columns:
+                fvg_bull = fvg_bull[fvg_bull["MitigatedIndex"].isna() | (fvg_bull["MitigatedIndex"] == 0) | (fvg_bull["MitigatedIndex"] >= len(df) - 1)]
+            fvg_below = fvg_bull[fvg_bull["Bottom"] < entry]
+            if not fvg_below.empty:
+                support_levels.append(float(fvg_below["Bottom"].iloc[-1]))
+
+        # Check for unmitigated Bullish Order Block (OB == 1) below entry
+        if ob_data is not None and "OB" in ob_data.columns and "Bottom" in ob_data.columns:
+            ob_bull = ob_data[ob_data["OB"] == 1]
+            if "MitigatedIndex" in ob_bull.columns:
+                ob_bull = ob_bull[ob_bull["MitigatedIndex"].isna() | (ob_bull["MitigatedIndex"] == 0) | (ob_bull["MitigatedIndex"] >= len(df) - 1)]
+            ob_below = ob_bull[ob_bull["Bottom"] < entry]
+            if not ob_below.empty:
+                support_levels.append(float(ob_below["Bottom"].iloc[-1]))
+
+        if support_levels:
+            sl_anchor = max(support_levels)
+            sl = sl_anchor * 0.997
+            risk = entry - sl
+            if risk > (0.2 * atr) and risk < (4.0 * atr):
+                tp = entry + (2.3 * risk)
+                rr = round((tp - entry) / risk, 2)
+                return {
+                    "strategy_name": "ICT_OrderBlock_FVG",
+                    "side": "LONG",
+                    "entry": round(entry, 4),
+                    "sl": round(sl, 4),
+                    "tp": round(tp, 4),
+                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {sl_anchor:.2f}. RVOL: {rvol:.2f}x",
+                    "rvol": round(rvol, 2),
+                    "rr": rr
+                }
+
+    # --- Bearish ICT Setup ---
+    if bearish_structure:
+        resistance_levels: List[float] = []
+
+        # Check for unmitigated Bearish FVG (FVG == -1) above entry
+        if "FVG" in fvg_data.columns and "Top" in fvg_data.columns:
+            fvg_bear = fvg_data[fvg_data["FVG"] == -1]
+            if "MitigatedIndex" in fvg_bear.columns:
+                fvg_bear = fvg_bear[fvg_bear["MitigatedIndex"].isna() | (fvg_bear["MitigatedIndex"] == 0) | (fvg_bear["MitigatedIndex"] >= len(df) - 1)]
+            fvg_above = fvg_bear[fvg_bear["Top"] > entry]
+            if not fvg_above.empty:
+                resistance_levels.append(float(fvg_above["Top"].iloc[-1]))
+
+        # Check for unmitigated Bearish Order Block (OB == -1) above entry
+        if ob_data is not None and "OB" in ob_data.columns and "Top" in ob_data.columns:
+            ob_bear = ob_data[ob_data["OB"] == -1]
+            if "MitigatedIndex" in ob_bear.columns:
+                ob_bear = ob_bear[ob_bear["MitigatedIndex"].isna() | (ob_bear["MitigatedIndex"] == 0) | (ob_bear["MitigatedIndex"] >= len(df) - 1)]
+            ob_above = ob_bear[ob_bear["Top"] > entry]
+            if not ob_above.empty:
+                resistance_levels.append(float(ob_above["Top"].iloc[-1]))
+
+        if resistance_levels:
+            sl_anchor = min(resistance_levels)
+            sl = sl_anchor * 1.003
+            risk = sl - entry
+            if risk > (0.2 * atr) and risk < (4.0 * atr):
+                tp = entry - (2.3 * risk)
+                rr = round((entry - tp) / risk, 2)
+                return {
+                    "strategy_name": "ICT_OrderBlock_FVG",
+                    "side": "SHORT",
+                    "entry": round(entry, 4),
+                    "sl": round(sl, 4),
+                    "tp": round(tp, 4),
+                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {sl_anchor:.2f}. RVOL: {rvol:.2f}x",
+                    "rvol": round(rvol, 2),
+                    "rr": rr
+                }
+
+    return None
+
+
+def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """
+    Supertrend + ADX Momentum Strategy (pandas-ta-classic library):
+    1. Computes Supertrend (10, 3.0) and ADX (14).
+    2. Detects direction flip on latest closed candle (from -1 to 1 for LONG, or 1 to -1 for SHORT).
+    3. Confirms trend strength: ADX_14 > 25 and RVOL >= 1.2.
+    4. Sets SL at the active Supertrend line and TP at 2.2R.
+    """
+    if len(df) < 30:
+        return None
+
+    try:
+        # Use pandas_ta accessor
+        st = df.ta.supertrend(length=10, multiplier=3.0)
+        adx = df.ta.adx(length=14)
+    except Exception:
+        return None
+
+    if st is None or adx is None or st.empty or adx.empty:
+        return None
+
+    # Identify direction and line columns from supertrend
+    dir_cols = [c for c in st.columns if "SUPERTd" in c or "d" in c.lower()]
+    line_cols = [c for c in st.columns if c.startswith("SUPERT_")]
+    adx_cols = [c for c in adx.columns if c.startswith("ADX_")]
+
+    if not dir_cols or not line_cols or not adx_cols:
+        return None
+
+    dir_col = dir_cols[0]
+    line_col = line_cols[0]
+    adx_col = adx_cols[0]
+
+    curr_dir = int(st[dir_col].iloc[-1])
+    prev_dir = int(st[dir_col].iloc[-2])
+    adx_val = float(adx[adx_col].iloc[-1])
+
+    curr = df.iloc[-1]
+    entry = float(curr["close"])
+    rvol = float(curr["rvol_20"]) if pd.notnull(curr.get("rvol_20")) else 1.0
+    atr = float(curr["atr_14"]) if pd.notnull(curr.get("atr_14")) else float(entry * 0.01)
+
+    # Condition: Trend strength confirmation
+    if adx_val < 25.0 or rvol < 1.2:
+        return None
+
+    st_line = float(st[line_col].iloc[-1])
+
+    # --- Bullish Supertrend Flip (-1 -> 1) ---
+    if prev_dir == -1 and curr_dir == 1:
+        sl = st_line if st_line < entry else (entry - (1.5 * atr))
+        risk = entry - sl
+        if risk > 0:
+            tp = entry + (2.2 * risk)
+            rr = round((tp - entry) / risk, 2)
+            return {
+                "strategy_name": "Supertrend_ADX_Momentum",
+                "side": "LONG",
+                "entry": round(entry, 4),
+                "sl": round(sl, 4),
+                "tp": round(tp, 4),
+                "setup_notes": f"Supertrend Bullish Flip (-1->1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {st_line:.2f}",
+                "rvol": round(rvol, 2),
+                "rr": rr
+            }
+
+    # --- Bearish Supertrend Flip (1 -> -1) ---
+    if prev_dir == 1 and curr_dir == -1:
+        sl = st_line if st_line > entry else (entry + (1.5 * atr))
+        risk = sl - entry
+        if risk > 0:
+            tp = entry - (2.2 * risk)
+            rr = round((entry - tp) / risk, 2)
+            return {
+                "strategy_name": "Supertrend_ADX_Momentum",
+                "side": "SHORT",
+                "entry": round(entry, 4),
+                "sl": round(sl, 4),
+                "tp": round(tp, 4),
+                "setup_notes": f"Supertrend Bearish Flip (1->-1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {st_line:.2f}",
+                "rvol": round(rvol, 2),
+                "rr": rr
+            }
 
     return None
 
@@ -338,9 +570,11 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
 STRATEGY_REGISTRY = {
     "SMC_Liquidity_Sweep": smc_liquidity_sweep,
+    "ICT_OrderBlock_FVG": strat_ict_orderblock_fvg,
+    "Supertrend_ADX_Momentum": strat_supertrend_adx,
     "EMA_Trend_Pullback": ema_trend_pullback,
     "BB_Volatility_Breakout": bb_volatility_breakout,
-    "RSI_Divergence_Reversal": rsi_divergence_reversal
+    "RSI_Divergence_Reversal": rsi_divergence_reversal,
 }
 
 

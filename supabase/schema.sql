@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS bot_config (
     symbols TEXT[] NOT NULL DEFAULT ARRAY['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
     active_strategies TEXT[] NOT NULL DEFAULT ARRAY[
         'SMC_Liquidity_Sweep', 
+        'ICT_OrderBlock_FVG',
+        'Supertrend_ADX_Momentum',
         'EMA_Trend_Pullback', 
         'BB_Volatility_Breakout', 
         'RSI_Divergence_Reversal'
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     blocked_utc_hours INT[] NOT NULL DEFAULT ARRAY[]::INT[],
     quarantined_symbols TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     deepseek_model TEXT NOT NULL DEFAULT 'deepseek-chat',
+    deepseek_base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
     binance_api_key_override TEXT DEFAULT NULL,
     binance_secret_override TEXT DEFAULT NULL,
     deepseek_key_override TEXT DEFAULT NULL,
@@ -358,4 +361,46 @@ BEGIN
             ALTER PUBLICATION supabase_realtime ADD TABLE market_news;
         END IF;
     END IF;
+END $$;
+
+-- ==============================================================================
+-- 11. MIGRATION BLOCK: Upgrades for Dynamic AI Base URL & Institutional Indicators
+-- ==============================================================================
+DO $$
+BEGIN
+    -- Add deepseek_base_url column if not present
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'bot_config' AND column_name = 'deepseek_base_url'
+    ) THEN
+        ALTER TABLE bot_config ADD COLUMN deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
+    END IF;
+
+    -- Update active_strategies column default to include all 6 strategies
+    ALTER TABLE bot_config 
+    ALTER COLUMN active_strategies SET DEFAULT ARRAY[
+        'SMC_Liquidity_Sweep',
+        'ICT_OrderBlock_FVG',
+        'Supertrend_ADX_Momentum',
+        'EMA_Trend_Pullback',
+        'BB_Volatility_Breakout',
+        'RSI_Divergence_Reversal'
+    ];
+
+    -- Update existing singleton row (id = 1) deepseek_base_url if NULL or empty
+    UPDATE bot_config 
+    SET deepseek_base_url = 'https://api.deepseek.com' 
+    WHERE id = 1 AND (deepseek_base_url IS NULL OR deepseek_base_url = '');
+
+    -- Ensure existing row 1 has the full set of 6 active strategies if previously set to legacy 4
+    UPDATE bot_config 
+    SET active_strategies = ARRAY[
+        'SMC_Liquidity_Sweep',
+        'ICT_OrderBlock_FVG',
+        'Supertrend_ADX_Momentum',
+        'EMA_Trend_Pullback',
+        'BB_Volatility_Breakout',
+        'RSI_Divergence_Reversal'
+    ]
+    WHERE id = 1 AND cardinality(active_strategies) <= 4;
 END $$;

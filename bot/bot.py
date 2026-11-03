@@ -17,6 +17,7 @@ Architecture:
 import os
 import sys
 import json
+import re
 import time
 import math
 from datetime import datetime, timezone
@@ -108,11 +109,15 @@ def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
 
 
 def get_deepseek_client(cfg: Dict[str, Any]) -> OpenAI:
-    """Initializes OpenAI client pointed at DeepSeek API endpoint."""
+    """
+    Initializes OpenAI client dynamically pointed at DeepSeek / OpenRouter / BeatAPI endpoint.
+    Supports dynamic routing via deepseek_base_url and deepseek_key_override from bot_config or env.
+    """
     api_key = cfg.get("deepseek_key_override") or os.getenv("DEEPSEEK_API_KEY", "")
+    base_url = cfg.get("deepseek_base_url") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     return OpenAI(
         api_key=api_key or "sk-dummy-key",
-        base_url="https://api.deepseek.com"
+        base_url=base_url
     )
 
 
@@ -136,6 +141,8 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
         "active_strategies": [
             "SMC_Liquidity_Sweep",
+            "ICT_OrderBlock_FVG",
+            "Supertrend_ADX_Momentum",
             "EMA_Trend_Pullback",
             "BB_Volatility_Breakout",
             "RSI_Divergence_Reversal"
@@ -153,6 +160,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "blocked_utc_hours": [],
         "quarantined_symbols": [],
         "deepseek_model": "deepseek-chat",
+        "deepseek_base_url": "https://api.deepseek.com",
         "panic_close_all": False
     }
 
@@ -291,7 +299,39 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
     return {"equity": equity, "free_margin": free_margin}
 
 
-# --- DETERMINISTIC AI AUDIT VERIFICATION ---
+# --- DETERMINISTIC AI AUDIT VERIFICATION & RESILIENT JSON PARSER ---
+
+def parse_ai_json(raw_text: str) -> Dict[str, Any]:
+    """
+    Resiliently cleans and extracts a JSON payload from AI model responses.
+    Handles markdown code blocks (```json ... ```), raw strings, and third-party
+    free proxy wrappers (e.g. beatapi.io, OpenRouter) using regex stripping.
+    """
+    if not raw_text:
+        return {}
+
+    text = raw_text.strip()
+
+    # 1. Strip leading/trailing markdown code fences using multi-line regex
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+
+    # 2. Try parsing direct cleaned text
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # 3. Secondary extraction: find outermost JSON object {...}
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+
+    # 4. Fallback to basic cleaner
+    return extract_json_safely(raw_text)
+
 
 def extract_json_safely(text: str) -> Dict[str, Any]:
     """Cleans markdown code blocks and extracts parsed JSON payload."""
@@ -427,7 +467,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
             max_tokens=600
         )
         content = response.choices[0].message.content or "{}"
-        autopsy_data = extract_json_safely(content)
+        autopsy_data = parse_ai_json(content)
 
         # 1. Insert into trade_autopsies
         supabase.table("trade_autopsies").insert({
@@ -886,7 +926,7 @@ def scan_and_execute_signals(
                         max_tokens=700
                     )
                     content = response.choices[0].message.content or "{}"
-                    raw_audit = extract_json_safely(content)
+                    raw_audit = parse_ai_json(content)
                 except Exception as ai_err:
                     print(f"[scanner] DeepSeek API audit warning: {ai_err}")
                     raw_audit = {"veto_triggered": True, "veto_reason": "AI API communication failure"}

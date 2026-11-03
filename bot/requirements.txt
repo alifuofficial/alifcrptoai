@@ -1,7 +1,9 @@
-ccxt>=4.2.0
-supabase>=2.3.0
-openai>=1.14.0
+ccxt>=4.4.0
+supabase>=2.10.0
+openai>=1.55.0
 pandas>=2.2.0
-numpy>=1.26.4
-requests>=2.31.0
+numpy>=1.26.0
+requests>=2.32.0
+smartmoneyconcepts>=0.0.26
+pandas-ta-classic>=0.9.0
 python-dotenv>=1.0.1

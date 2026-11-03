@@ -64,6 +64,7 @@ interface BotConfig {
   blocked_utc_hours: number[];
   quarantined_symbols: string[];
   deepseek_model: string;
+  deepseek_base_url?: string | null;
   binance_api_key_override?: string | null;
   binance_secret_override?: string | null;
   deepseek_key_override?: string | null;
@@ -173,11 +174,19 @@ interface MarketNewsItem {
   created_at?: string;
 }
 
-const ALL_STRATEGIES = [
-  "SMC_Liquidity_Sweep",
-  "EMA_Trend_Pullback",
-  "BB_Volatility_Breakout",
-  "RSI_Divergence_Reversal",
+interface StrategyInfo {
+  id: string;
+  label: string;
+  regime: string;
+}
+
+const ALL_STRATEGIES: StrategyInfo[] = [
+  { id: "SMC_Liquidity_Sweep", label: "SMC Liquidity Sweep", regime: "Institutional Liquidity" },
+  { id: "ICT_OrderBlock_FVG", label: "ICT Order Block + FVG (smartmoneyconcepts)", regime: "Institutional SMC" },
+  { id: "Supertrend_ADX_Momentum", label: "Supertrend + ADX (pandas-ta-classic)", regime: "Strong Trend" },
+  { id: "EMA_Trend_Pullback", label: "EMA Trend Pullback", regime: "Trend Following" },
+  { id: "BB_Volatility_Breakout", label: "BB Volatility Breakout", regime: "Volatility Compression" },
+  { id: "RSI_Divergence_Reversal", label: "RSI Divergence Reversal", regime: "Mean Reversion" },
 ];
 
 type NavSection = "overview" | "positions" | "strategies" | "news" | "audits" | "autopsies" | "settings";
@@ -468,6 +477,7 @@ export default function CommandCenterPage() {
         telegram_notifications: Boolean(formSettings.telegram_notifications),
         auto_apply_lessons: Boolean(formSettings.auto_apply_lessons),
         deepseek_model: formSettings.deepseek_model || "deepseek-chat",
+        deepseek_base_url: formSettings.deepseek_base_url || "https://api.deepseek.com",
         symbols: formSettings.symbols || ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
         binance_api_key_override: formSettings.binance_api_key_override || null,
         binance_secret_override: formSettings.binance_secret_override || null,
@@ -1372,23 +1382,26 @@ export default function CommandCenterPage() {
                 </button>
               </div>
 
-              {/* 4 Cards Summary */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                {ALL_STRATEGIES.map((name) => {
-                  const row = perfView.find((p) => p.strategy_name === name);
-                  const isEnabled = config?.active_strategies?.includes(name);
+              {/* 6 Strategy Cards Summary Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+                {ALL_STRATEGIES.map((strat) => {
+                  const row = perfView.find((p) => p.strategy_name === strat.id);
+                  const isEnabled = config?.active_strategies?.includes(strat.id);
                   const pf = Number(row?.profit_factor || 0);
 
                   return (
-                    <div key={name} className="bg-surface border border-border rounded-lg p-4 flex flex-col justify-between">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-semibold text-textMain truncate">{name}</span>
-                        <span className={`h-2 w-2 rounded-full ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
+                    <div key={strat.id} className="bg-surface border border-border rounded-lg p-3.5 flex flex-col justify-between">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-textMain truncate" title={strat.label}>
+                          {strat.label}
+                        </span>
+                        <span className={`h-2 w-2 rounded-full shrink-0 ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
                       </div>
-                      <div className="text-2xl font-bold tabular-nums text-textMain">
+                      <span className="text-[10px] text-brand-600 font-medium truncate mb-2">{strat.regime}</span>
+                      <div className="text-xl font-bold tabular-nums text-textMain">
                         {Number(row?.win_rate_pct || 0).toFixed(1)}%
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-textMuted tabular-nums">
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-textMuted tabular-nums">
                         <span>PF: {pf.toFixed(2)}</span>
                         <span>{row?.closed_trades || 0} Trades</span>
                       </div>
@@ -1412,7 +1425,8 @@ export default function CommandCenterPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border tabular-nums">
-                    {ALL_STRATEGIES.map((stratName) => {
+                    {ALL_STRATEGIES.map((strat) => {
+                      const stratName = strat.id;
                       const row = perfView.find((p) => p.strategy_name === stratName) || {
                         strategy_name: stratName,
                         closed_trades: 0,
@@ -1435,9 +1449,18 @@ export default function CommandCenterPage() {
 
                       return (
                         <tr key={stratName} className="hover:bg-slate-50 transition-colors">
-                          <td className="py-3.5 px-4 font-semibold text-textMain flex items-center gap-2">
-                            <span className={`h-2 w-2 rounded-full ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
-                            <span>{stratName}</span>
+                          <td className="py-3.5 px-4 font-semibold text-textMain">
+                            <div className="flex items-center gap-2.5">
+                              <span className={`h-2 w-2 rounded-full shrink-0 ${isEnabled ? "bg-emerald-500" : "bg-slate-300"}`} />
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-textMain">{strat.label}</div>
+                                <div className="text-[10px] text-textMuted flex items-center gap-1.5 font-mono">
+                                  <span>{stratName}</span>
+                                  <span>•</span>
+                                  <span className="text-brand-600 font-sans">{strat.regime}</span>
+                                </div>
+                              </div>
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 text-center">
                             <button
@@ -2088,6 +2111,91 @@ export default function CommandCenterPage() {
                   className="w-full rounded-md border border-border bg-slate-50 py-2.5 px-4 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                 />
                 <span className="text-[10px] text-textMuted">Comma-separated ccxt pair identifiers.</span>
+              </div>
+
+              {/* Dynamic AI Base URL & Routing */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
+                      <Cpu className="h-4 w-4" />
+                      <span>Dynamic AI Endpoint &amp; Base URL Routing</span>
+                    </h3>
+                    <p className="text-xs text-textMuted mt-1">
+                      Route Chief Quantitative Risk Officer audits through Official DeepSeek, OpenRouter, or BeatAPI proxies.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-textMain mb-1">
+                      DeepSeek / OpenAI Base URL
+                    </label>
+                    <input
+                      type="text"
+                      value={formSettings.deepseek_base_url || "https://api.deepseek.com"}
+                      onChange={(e) => setFormSettings({ ...formSettings, deepseek_base_url: e.target.value })}
+                      placeholder="https://api.deepseek.com"
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  {/* Quick Presets */}
+                  <div>
+                    <span className="text-[10px] font-bold text-textMuted uppercase tracking-wider block mb-1.5">
+                      Quick-Select Presets:
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[
+                        { name: "Official DeepSeek", url: "https://api.deepseek.com", defaultModel: "deepseek-chat" },
+                        { name: "OpenRouter Free", url: "https://openrouter.ai/api/v1", defaultModel: "deepseek/deepseek-chat:free" },
+                        { name: "BeatAPI", url: "https://beatapi.io/v1", defaultModel: "deepseek-chat" },
+                      ].map((preset) => {
+                        const isSelected = (formSettings.deepseek_base_url || "https://api.deepseek.com") === preset.url;
+                        return (
+                          <button
+                            key={preset.url}
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                deepseek_base_url: preset.url,
+                                deepseek_model: formSettings.deepseek_model || preset.defaultModel,
+                              })
+                            }
+                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-brand-50 border-brand-500 text-brand-700 font-semibold shadow-xs"
+                                : "bg-surface border-border text-textMuted hover:text-textMain hover:bg-slate-50"
+                            }`}
+                          >
+                            <span>{preset.name}</span>
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-mono">
+                              {preset.url.replace("https://", "")}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-textMain mb-1">
+                      AI Model Identifier
+                    </label>
+                    <input
+                      type="text"
+                      value={formSettings.deepseek_model || "deepseek-chat"}
+                      onChange={(e) => setFormSettings({ ...formSettings, deepseek_model: e.target.value })}
+                      placeholder="deepseek-chat"
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
+                    />
+                    <span className="text-[10px] text-textMuted">
+                      Standard: <code>deepseek-chat</code>. For OpenRouter: <code>deepseek/deepseek-chat</code> or <code>deepseek/deepseek-r1</code>.
+                    </span>
+                  </div>
+                </div>
               </div>
 
               {/* Encrypted API Keys */}
