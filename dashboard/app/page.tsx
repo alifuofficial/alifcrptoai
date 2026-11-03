@@ -256,7 +256,7 @@ export default function CommandCenterPage() {
   const [autopsies, setAutopsies] = useState<TradeAutopsy[]>([]);
 
   // UI States
-  const [activeSection, setActiveSection] = useState<NavSection>("chart");
+  const [activeSection, setActiveSection] = useState<NavSection>("overview");
   const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -1168,14 +1168,27 @@ export default function CommandCenterPage() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
-          {/* Section 1: Institutional Trading Desk */}
+          {/* Section 1: Trading Desk */}
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
-            {/* Tab 1: Live Execution Chart & Positions */}
+            {/* 1. Overview & KPIs (Default Home Dashboard) */}
+            <button
+              onClick={() => setActiveSection("overview")}
+              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                activeSection === "overview"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 mr-3 text-slate-700" />
+              <span>Overview &amp; KPIs</span>
+            </button>
+
+            {/* 2. Live Execution Chart */}
             <button
               onClick={() => setActiveSection("chart")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "chart" || activeSection === "positions"
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "chart"
                   ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
@@ -1191,7 +1204,27 @@ export default function CommandCenterPage() {
               )}
             </button>
 
-            {/* Tab 2: Trading Journal & Analytics */}
+            {/* 3. Live Positions */}
+            <button
+              onClick={() => setActiveSection("positions")}
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                activeSection === "positions"
+                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center">
+                <Layers className="w-4 h-4 mr-3 text-brand-500" />
+                <span>Live Positions</span>
+              </div>
+              {openTrades.length > 0 && (
+                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                  {openTrades.length}
+                </span>
+              )}
+            </button>
+
+            {/* 4. Trading Journal */}
             <button
               onClick={() => setActiveSection("journal")}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
@@ -1204,7 +1237,7 @@ export default function CommandCenterPage() {
               <span>Trading Journal</span>
             </button>
 
-            {/* Tab 3: Strategy Performance Leaderboard */}
+            {/* 5. Strategy Analytics */}
             <button
               onClick={() => setActiveSection("strategies")}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
@@ -1213,37 +1246,38 @@ export default function CommandCenterPage() {
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <Layers className="w-4 h-4 mr-3 text-brand-600" />
-              <span>Strategy Leaderboard</span>
+              <TrendingUp className="w-4 h-4 mr-3 text-brand-600" />
+              <span>Strategy Analytics</span>
             </button>
           </div>
 
-          {/* Section 2: AI Intelligence & Self-Learning */}
+          {/* Section 2: Market Intelligence */}
           <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
-            {/* Tab 4: AI Self-Improvement & Autopsies */}
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
             <button
-              onClick={() => setActiveSection("autopsies")}
+              onClick={() => setActiveSection("news")}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "autopsies"
+                activeSection === "news"
                   ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <BrainCircuit className="w-4 h-4 mr-3 text-emerald-600" />
-                <span>AI Self-Learning</span>
+                <Newspaper className="w-4 h-4 mr-3 text-indigo-600" />
+                <span>Market &amp; Macro News</span>
               </div>
-              {lessons.filter((l) => l.status === "PENDING").length > 0 && (
-                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
-                  {lessons.filter((l) => l.status === "PENDING").length}
-                </span>
-              )}
+              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                {newsItems.length}
+              </span>
             </button>
+          </div>
 
+          {/* Section 3: AI Intelligence */}
+          <div>
+            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
             <button
               onClick={() => setActiveSection("audits")}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
                 activeSection === "audits"
                   ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
@@ -1255,45 +1289,30 @@ export default function CommandCenterPage() {
               </div>
               <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
             </button>
-          </div>
-
-          {/* Section 3: Telemetry & Macro News */}
-          <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Telemetry &amp; News</p>
-            <button
-              onClick={() => setActiveSection("overview")}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
-                activeSection === "overview"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
-                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4 mr-3 text-slate-600" />
-              <span>Executive Telemetry</span>
-            </button>
 
             <button
-              onClick={() => setActiveSection("news")}
+              onClick={() => setActiveSection("autopsies")}
               className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
-                activeSection === "news"
+                activeSection === "autopsies"
                   ? "bg-brand-50 text-brand-600 font-semibold"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <Newspaper className="w-4 h-4 mr-3 text-indigo-600" />
-                <span>Macro &amp; Crypto News</span>
+                <BrainCircuit className="w-4 h-4 mr-3 text-emerald-600" />
+                <span>Self-Learning</span>
               </div>
-              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
-                {newsItems.length}
-              </span>
+              {lessons.filter((l) => l.status === "PENDING").length > 0 && (
+                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
+                  {lessons.filter((l) => l.status === "PENDING").length}
+                </span>
+              )}
             </button>
           </div>
 
-          {/* Section 4: Management & Settings */}
+          {/* Section 4: Management */}
           <div>
             <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
-            {/* Tab 5: Risk, Execution & API Settings */}
             <button
               onClick={() => setActiveSection("settings")}
               className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${

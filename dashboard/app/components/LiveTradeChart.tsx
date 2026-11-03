@@ -16,6 +16,7 @@ import {
 import {
   Activity,
   Maximize2,
+  Minimize2,
   TrendingUp,
   TrendingDown,
   Layers,
@@ -94,6 +95,8 @@ export default function LiveTradeChart({
   const [priceChange24h, setPriceChange24h] = useState<number | null>(null);
   const [isLoadingCandles, setIsLoadingCandles] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const chartHeight = isExpanded ? 500 : 340;
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const tvContainerRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +129,16 @@ export default function LiveTradeChart({
     });
   };
 
+  // Dynamic height adjustment when user toggles Mid vs Expanded view
+  useEffect(() => {
+    if (chartInstanceRef.current && chartContainerRef.current) {
+      chartInstanceRef.current.applyOptions({
+        height: chartHeight,
+        width: chartContainerRef.current.clientWidth,
+      });
+    }
+  }, [chartHeight]);
+
   // ---------------------------------------------------------------------------
   // 1. LIGHTWEIGHT-CHARTS INITIALIZATION & LIFECYCLE
   // ---------------------------------------------------------------------------
@@ -145,7 +158,7 @@ export default function LiveTradeChart({
     const container = chartContainerRef.current;
     const chart = createChart(container, {
       width: container.clientWidth || 800,
-      height: 480,
+      height: chartHeight,
       layout: {
         background: { color: "#0B0E14" },
         textColor: "#94a3b8",
@@ -614,7 +627,7 @@ export default function LiveTradeChart({
         const tvDiv = document.createElement("div");
         tvDiv.id = `tv_chart_${Date.now()}`;
         tvDiv.style.width = "100%";
-        tvDiv.style.height = "520px";
+        tvDiv.style.height = `${chartHeight}px`;
         tvContainerRef.current.appendChild(tvDiv);
 
         new (window as any).TradingView.widget({
@@ -768,6 +781,16 @@ export default function LiveTradeChart({
           >
             <RefreshCw className={`w-4 h-4 ${isLoadingCandles ? "animate-spin" : ""}`} />
           </button>
+
+          {/* Sizing Toggle: Mid-Sized (340px) vs Expanded (500px) */}
+          <button
+            onClick={() => setIsExpanded((prev) => !prev)}
+            className="px-2.5 py-1.5 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-lg border border-border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-medium"
+            title={isExpanded ? "Collapse to Mid-Sized View (340px)" : "Expand to Full Height (500px)"}
+          >
+            {isExpanded ? <Minimize2 className="w-3.5 h-3.5 text-cyan-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isExpanded ? "Mid" : "Expand"}</span>
+          </button>
         </div>
       </div>
 
@@ -823,7 +846,7 @@ export default function LiveTradeChart({
       {/* ========================================================================= */}
       {/* 3. CHART CANVAS CONTAINER */}
       {/* ========================================================================= */}
-      <div className="relative w-full h-[500px]">
+      <div className={`relative w-full transition-all duration-200 ${isExpanded ? "h-[500px]" : "h-[340px]"}`}>
         {/* Mode A: Lightweight-charts Container */}
         <div
           ref={chartContainerRef}
