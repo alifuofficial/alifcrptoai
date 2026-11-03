@@ -444,8 +444,8 @@ export default function CommandCenterPage() {
           setSnapshotsHistory(data);
           setLatestSnapshot(data[data.length - 1]);
         } else if (tf === "ALL") {
-          // If completely empty database, record the initial baseline snapshot directly
-          const initialEquity = 10000.0;
+          // If completely empty database, record the initial real baseline snapshot directly
+          const initialEquity = 0.0;
           const { data: seeded } = await supabase
             .from("account_snapshots")
             .insert({
@@ -472,16 +472,41 @@ export default function CommandCenterPage() {
 
   const recordSnapshotNow = async () => {
     try {
-      const eq = Number(latestSnapshot?.equity_usdt || 10000.0);
-      const free = Number(latestSnapshot?.free_usdt || 10000.0);
-      const pnl = Number(latestSnapshot?.daily_pnl_usdt || 0.0);
-      const pnlPct = Number(latestSnapshot?.daily_pnl_pct || 0.0);
+      showToast("Querying live balance from Binance Futures...", "info");
+      const res = await fetch("/api/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service: "binance",
+          params: {
+            binance: {
+              apiKey: formSettings.binance_api_key_override,
+              secret: formSettings.binance_secret_override,
+              sandbox: config?.sandbox_mode,
+            },
+          },
+        }),
+      });
+      const data = await res.json();
+      let liveEquity = 0.0;
+      let liveFree = 0.0;
 
-      const { data, error } = await supabase
+      if (data.success && data.details) {
+        liveEquity = Number(data.details.totalWalletBalance || 0.0);
+        liveFree = Number(data.details.availableBalance || 0.0);
+      } else {
+        liveEquity = Number(latestSnapshot?.equity_usdt ?? 0.0);
+        liveFree = Number(latestSnapshot?.free_usdt ?? 0.0);
+      }
+
+      const pnl = Number(latestSnapshot?.daily_pnl_usdt ?? 0.0);
+      const pnlPct = Number(latestSnapshot?.daily_pnl_pct ?? 0.0);
+
+      const { data: savedSnap, error } = await supabase
         .from("account_snapshots")
         .insert({
-          equity_usdt: eq,
-          free_usdt: free,
+          equity_usdt: liveEquity,
+          free_usdt: liveFree,
           daily_pnl_usdt: pnl,
           daily_pnl_pct: pnlPct,
           open_positions: openTrades || [],
@@ -489,15 +514,15 @@ export default function CommandCenterPage() {
         .select()
         .single();
 
-      if (!error && data) {
-        setSnapshotsHistory((prev) => [...prev, data]);
-        setLatestSnapshot(data);
-        showToast("Synchronized real equity snapshot to database");
+      if (!error && savedSnap) {
+        setSnapshotsHistory((prev) => [...prev, savedSnap]);
+        setLatestSnapshot(savedSnap);
+        showToast(`Synchronized live mark: $${liveEquity.toFixed(2)} USDT`, "success");
       } else if (error) {
-        showToast(`Snapshot error: ${error.message}`);
+        showToast(`Snapshot error: ${error.message}`, "error");
       }
     } catch (err: any) {
-      showToast(`Snapshot error: ${err.message}`);
+      showToast(`Snapshot error: ${err.message}`, "error");
     }
   };
 
@@ -857,8 +882,8 @@ export default function CommandCenterPage() {
             : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
         return {
           label,
-          value: Number(s.equity_usdt || 10000.0),
-          pnl: Number(s.daily_pnl_usdt || 0.0),
+          value: Number(s.equity_usdt ?? 0.0),
+          pnl: Number(s.daily_pnl_usdt ?? 0.0),
           dateStr: s.created_at,
         };
       });
@@ -876,7 +901,7 @@ export default function CommandCenterPage() {
         ];
       }
     } else {
-      const base = Number(latestSnapshot?.equity_usdt || 10000.0);
+      const base = Number(latestSnapshot?.equity_usdt ?? 0.0);
       const now = new Date();
       const past = new Date(now.getTime() - 60 * 60 * 1000);
       points = [
@@ -889,7 +914,7 @@ export default function CommandCenterPage() {
         {
           label: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           value: base,
-          pnl: Number(latestSnapshot?.daily_pnl_usdt || 0.0),
+          pnl: Number(latestSnapshot?.daily_pnl_usdt ?? 0.0),
           dateStr: now.toISOString(),
         },
       ];
@@ -931,7 +956,7 @@ export default function CommandCenterPage() {
   const chartStats = useMemo(() => {
     const values = chartJsData.points.map((p) => p.value);
     if (!values.length) {
-      const base = Number(latestSnapshot?.equity_usdt || 10000.0);
+      const base = Number(latestSnapshot?.equity_usdt ?? 0.0);
       return { min: base, max: base, start: "N/A", end: "Current", count: 0 };
     }
     return {
@@ -945,10 +970,10 @@ export default function CommandCenterPage() {
 
   const chartOptions: ChartOptions<"line"> = useMemo(() => {
     const values = chartJsData.points.map((p) => p.value);
-    const minVal = values.length ? Math.min(...values) : 10000;
-    const maxVal = values.length ? Math.max(...values) : 10000;
+    const minVal = values.length ? Math.min(...values) : 0;
+    const maxVal = values.length ? Math.max(...values) : 0;
     const diff = maxVal - minVal;
-    const padding = diff === 0 ? 25 : Math.max(diff * 0.15, 10);
+    const padding = diff === 0 ? (maxVal === 0 ? 10 : maxVal * 0.15) : Math.max(diff * 0.15, 2);
 
     return {
       responsive: true,
@@ -1339,7 +1364,7 @@ export default function CommandCenterPage() {
                   </div>
                   <div>
                     <div className="text-3xl font-bold tabular-nums tracking-tight">
-                      ${Number(latestSnapshot?.equity_usdt || 10000.0).toLocaleString(undefined, {
+                      ${Number(latestSnapshot?.equity_usdt ?? 0.0).toLocaleString(undefined, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -1360,7 +1385,7 @@ export default function CommandCenterPage() {
                   </div>
                   <div>
                     <div className="text-3xl font-bold tabular-nums tracking-tight">
-                      ${Number(latestSnapshot?.free_usdt || 10000.0).toLocaleString(undefined, {
+                      ${Number(latestSnapshot?.free_usdt ?? 0.0).toLocaleString(undefined, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -1369,11 +1394,16 @@ export default function CommandCenterPage() {
                       <div
                         className="bg-brand-500 h-1.5 rounded-full transition-all duration-500"
                         style={{
-                          width: `${Math.min(
-                            100,
-                            ((Number(latestSnapshot?.free_usdt || 10000) / Number(latestSnapshot?.equity_usdt || 10000)) *
-                              100)
-                          )}%`,
+                          width: `${
+                            Number(latestSnapshot?.equity_usdt ?? 0) > 0
+                              ? Math.min(
+                                  100,
+                                  ((Number(latestSnapshot?.free_usdt ?? 0) /
+                                    Number(latestSnapshot?.equity_usdt ?? 1)) *
+                                    100)
+                                )
+                              : 0
+                          }%`,
                         }}
                       />
                     </div>

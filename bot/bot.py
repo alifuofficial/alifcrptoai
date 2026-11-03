@@ -239,8 +239,8 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
     Synchronizes wallet equity, free margin, intraday PnL, and open positions
     from Binance USDT-M Futures to the account_snapshots table.
     """
-    equity = 10000.0
-    free_margin = 10000.0
+    equity = 0.0
+    free_margin = 0.0
     daily_pnl = 0.0
     daily_pnl_pct = 0.0
     active_positions_json: List[Dict[str, Any]] = []
@@ -252,8 +252,10 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
         if not sandbox and has_api_keys:
             balance = exchange.fetch_balance()
             usdt_info = balance.get("USDT", {})
-            equity = float(usdt_info.get("total", 10000.0) or 10000.0)
-            free_margin = float(usdt_info.get("free", 10000.0) or 10000.0)
+            raw_total = usdt_info.get("total")
+            raw_free = usdt_info.get("free")
+            equity = float(raw_total) if raw_total is not None else 0.0
+            free_margin = float(raw_free) if raw_free is not None else 0.0
 
             # Fetch live positions
             positions = exchange.fetch_positions()
@@ -832,7 +834,11 @@ def scan_and_execute_signals(
     symbols = cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
     active_strats = cfg.get("active_strategies", [])
     quarantined_symbols = cfg.get("quarantined_symbols", [])
-    equity = account_info.get("equity", 10000.0)
+    equity = float(account_info.get("equity", 0.0) or 0.0)
+
+    # If real wallet equity is zero or insufficient, skip order execution to prevent API rejections
+    if equity <= 0 and not cfg.get("sandbox_mode", True):
+        return
 
     for symbol in symbols:
         if symbol in quarantined_symbols:
