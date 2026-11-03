@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import crypto from "crypto";
+import dns from "dns";
+
+// Force IPv4 resolution so outbound requests use 94.72.107.10 rather than VPS IPv6
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // ignore
+}
 
 export const dynamic = "force-dynamic";
 
