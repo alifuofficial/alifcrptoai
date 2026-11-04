@@ -28,6 +28,35 @@ except ImportError:
         ta = None
 
 
+def get_price_decimals(price: float) -> int:
+    """Returns dynamic decimal places depending on asset price tier."""
+    p = abs(float(price)) if price is not None else 0.0
+    if p >= 1000.0:
+        return 2
+    elif p >= 1.0:
+        return 4
+    elif p >= 0.01:
+        return 6
+    else:
+        return 8
+
+
+def round_price_dynamic(price: float) -> float:
+    """Rounds price dynamically to preserve significant digits on micro/memecoin pairs."""
+    if price is None:
+        return 0.0
+    decimals = get_price_decimals(price)
+    return round(float(price), decimals)
+
+
+def format_price_dynamic(price: float) -> str:
+    """Formats price into human-readable string with proper dynamic precision."""
+    if price is None:
+        return "0.00"
+    decimals = get_price_decimals(price)
+    return f"{float(price):.{decimals}f}"
+
+
 def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Computes technical indicators across the OHLCV DataFrame:
@@ -106,8 +135,10 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Price swept below swing_low, but closed back above swing_low with bullish displacement
     if (prev["low"] < swing_low or curr["low"] < swing_low) and curr["close"] > swing_low:
         if curr["close"] > curr["open"]:  # Bullish candle
-            # Check for bullish FVG (low of bar i > high of bar i-2)
-            has_fvg = float(curr["low"]) > float(prev2["high"])
+            # Check for bullish FVG (low of bar i > high of bar i-2 or bar i-1 > bar i-3)
+            has_fvg = (float(curr["low"]) > float(prev2["high"])) or (float(prev["low"]) > float(df.iloc[-4]["high"]))
+            if not has_fvg:
+                return None
             swept_low = min(float(prev["low"]), float(curr["low"]))
             entry = float(curr["close"])
             sl = swept_low - (0.5 * atr)
@@ -118,10 +149,10 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "LONG",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Swept 15-bar low ({swing_low:.2f}) with reclaim. FVG: {has_fvg}. RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Swept 15-bar low ({format_price_dynamic(swing_low)}) with bullish displacement reclaim. Verified Bullish FVG. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -130,8 +161,10 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Price swept above swing_high, but closed back below swing_high with bearish displacement
     if (prev["high"] > swing_high or curr["high"] > swing_high) and curr["close"] < swing_high:
         if curr["close"] < curr["open"]:  # Bearish candle
-            # Check for bearish FVG (high of bar i < low of bar i-2)
-            has_fvg = float(curr["high"]) < float(prev2["low"])
+            # Check for bearish FVG (high of bar i < low of bar i-2 or bar i-1 < low of bar i-3)
+            has_fvg = (float(curr["high"]) < float(prev2["low"])) or (float(prev["high"]) < float(df.iloc[-4]["low"]))
+            if not has_fvg:
+                return None
             swept_high = max(float(prev["high"]), float(curr["high"]))
             entry = float(curr["close"])
             sl = swept_high + (0.5 * atr)
@@ -142,10 +175,10 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "SHORT",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Swept 15-bar high ({swing_high:.2f}) with reclaim. FVG: {has_fvg}. RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Swept 15-bar high ({format_price_dynamic(swing_high)}) with bearish displacement reclaim. Verified Bearish FVG. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -239,10 +272,10 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "LONG",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {sl_anchor:.2f}. RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -279,10 +312,10 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "SHORT",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {sl_anchor:.2f}. RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -418,10 +451,10 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "LONG",
-                "entry": round(entry, 4),
-                "sl": round(sl, 4),
-                "tp": round(tp, 4),
-                "setup_notes": f"Supertrend Bullish Flip (-1->1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {st_line:.2f}",
+                "entry": round_price_dynamic(entry),
+                "sl": round_price_dynamic(sl),
+                "tp": round_price_dynamic(tp),
+                "setup_notes": f"Supertrend Bullish Flip (-1->1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -436,10 +469,10 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "SHORT",
-                "entry": round(entry, 4),
-                "sl": round(sl, 4),
-                "tp": round(tp, 4),
-                "setup_notes": f"Supertrend Bearish Flip (1->-1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {st_line:.2f}",
+                "entry": round_price_dynamic(entry),
+                "sl": round_price_dynamic(sl),
+                "tp": round_price_dynamic(tp),
+                "setup_notes": f"Supertrend Bearish Flip (1->-1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -479,10 +512,10 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "LONG",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Bullish dynamic bounce off EMA 20 ({ema_20:.2f}). RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Bullish dynamic bounce off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -500,10 +533,10 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "SHORT",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
-                    "setup_notes": f"Bearish dynamic rejection off EMA 20 ({ema_20:.2f}). RVOL: {rvol:.2f}x",
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
+                    "setup_notes": f"Bearish dynamic rejection off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -546,9 +579,9 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "LONG",
-                "entry": round(entry, 4),
-                "sl": round(sl, 4),
-                "tp": round(tp, 4),
+                "entry": round_price_dynamic(entry),
+                "sl": round_price_dynamic(sl),
+                "tp": round_price_dynamic(tp),
                 "setup_notes": f"Bollinger Squeeze Breakout Upper. Width expanded from <0.025. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -564,9 +597,9 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "SHORT",
-                "entry": round(entry, 4),
-                "sl": round(sl, 4),
-                "tp": round(tp, 4),
+                "entry": round_price_dynamic(entry),
+                "sl": round_price_dynamic(sl),
+                "tp": round_price_dynamic(tp),
                 "setup_notes": f"Bollinger Squeeze Breakout Lower. Width expanded from <0.025. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -610,9 +643,9 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "LONG",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
                     "setup_notes": f"RSI Oversold Exhaustion Reclaim ({curr_rsi:.1f}). Bullish Engulfing. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -636,9 +669,9 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "SHORT",
-                    "entry": round(entry, 4),
-                    "sl": round(sl, 4),
-                    "tp": round(tp, 4),
+                    "entry": round_price_dynamic(entry),
+                    "sl": round_price_dynamic(sl),
+                    "tp": round_price_dynamic(tp),
                     "setup_notes": f"RSI Overbought Exhaustion Rejection ({curr_rsi:.1f}). Bearish Engulfing. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr

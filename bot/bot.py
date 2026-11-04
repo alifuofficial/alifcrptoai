@@ -58,7 +58,12 @@ def start_health_server(port: int = 80):
     except Exception as exc:
         print(f"[bot] Note: Health server port {port} unavailable ({exc}); continuing worker loop.")
 
-from strategies import evaluate_enabled_strategies, calc_indicators
+from strategies import (
+    evaluate_enabled_strategies,
+    calc_indicators,
+    round_price_dynamic,
+    format_price_dynamic
+)
 from news_macro import check_usd_macro_blackout, fetch_crypto_headlines, _refresh_macro_calendar
 from notifier import (
     send_telegram_alert,
@@ -653,7 +658,7 @@ def manage_open_positions(
 
                 partial_qty = round(qty * 0.5, 4)
                 new_remaining_qty = round(qty - partial_qty, 4)
-                be_sl_price = round(entry * 1.0015, 4) if side == "LONG" else round(entry * 0.9985, 4)
+                be_sl_price = round_price_dynamic(entry * 1.0015) if side == "LONG" else round_price_dynamic(entry * 0.9985)
                 new_sl_id = f"sim_be_sl_{int(time.time())}" if is_sim else None
 
                 if not is_sim:
@@ -1036,6 +1041,14 @@ def scan_and_execute_signals(
                 active_lessons = [f"- {l['weakness_detected']}: {l['prompt_guardrail_rule']}" for l in (lessons_query.data or [])]
                 lessons_block = "\n".join(active_lessons) if active_lessons else "No active historical failure guardrails."
 
+                # Calculate HTF 24h trend alignment from 15m OHLCV bars (100 bars = 25 hours)
+                ema_50_val = float(ind_df["ema_50"].iloc[-1]) if "ema_50" in ind_df.columns else latest_price
+                ema_20_val = float(ind_df["ema_20"].iloc[-1]) if "ema_20" in ind_df.columns else latest_price
+                h24 = float(df["high"].max())
+                l24 = float(df["low"].min())
+                htf_aligned = (latest_price > ema_50_val and side == "LONG") or (latest_price < ema_50_val and side == "SHORT")
+                htf_status = "BULLISH_TREND_ALIGNED" if (latest_price > ema_50_val and side == "LONG") else ("BEARISH_TREND_ALIGNED" if (latest_price < ema_50_val and side == "SHORT") else "COUNTER_TREND_OR_MEAN_REVERSION")
+
                 # DeepSeek Audit Prompt construction
                 audit_payload = {
                     "symbol": symbol,
@@ -1048,6 +1061,7 @@ def scan_and_execute_signals(
                     "setup_notes": setup["setup_notes"],
                     "relative_volume_rvol": rvol,
                     "funding_rate_pct": funding_rate,
+                    "htf_regime_context": f"24h HTF Regime: {htf_status} (Latest Close: {format_price_dynamic(latest_price)}, 24h EMA50: {format_price_dynamic(ema_50_val)}, EMA20: {format_price_dynamic(ema_20_val)}, 24h Range: [{format_price_dynamic(l24)} - {format_price_dynamic(h24)}])",
                     "latest_headlines": headlines,
                     "active_guardrail_lessons": lessons_block,
                     "macro_blackout_state": macro_status
@@ -1108,8 +1122,9 @@ def scan_and_execute_signals(
                 entry_price = float(setup["entry"])
                 sl_price = float(setup["sl"])
                 tp_price = float(setup["tp"])
-                risk_per_unit = max(abs(entry_price - sl_price), 1e-5)
-                position_qty = round(risk_usdt / risk_per_unit, 4)
+                risk_per_unit = max(abs(entry_price - sl_price), 1e-8)
+                raw_qty = risk_usdt / risk_per_unit
+                position_qty = round(raw_qty, 2 if raw_qty >= 10.0 else (4 if raw_qty >= 0.01 else 6))
 
                 if position_qty <= 0:
                     position_qty = 0.01
@@ -1125,7 +1140,7 @@ def scan_and_execute_signals(
 
                 if is_simulated:
                     mode_label = "ANALYTICAL SIGNAL (Zero-Balance Paper Tracking)" if is_zero_balance_mode else "SANDBOX DEMO"
-                    print(f"[execution] {mode_label} recorded for {symbol} {side}: Entry ${entry_price:.4f}, SL ${sl_price:.4f}, TP ${tp_price:.4f} (+2.2R), Score {total_score}/100")
+                    print(f"[execution] {mode_label} recorded for {symbol} {side}: Entry ${format_price_dynamic(entry_price)}, SL ${format_price_dynamic(sl_price)}, TP ${format_price_dynamic(tp_price)} (+{setup.get('rr', 2.0)}R), Score {total_score}/100")
                     exchange_order_id = f"ANALYTICS_{int(time.time())}"
                     sl_order_id = f"ANALYTICS_SL_{int(time.time())}"
                     tp_order_id = f"ANALYTICS_TP_{int(time.time())}"
