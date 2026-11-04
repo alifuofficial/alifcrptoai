@@ -87,13 +87,81 @@ def get_supabase_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
+# Cached Binance exchange client to preserve pre-loaded markets across loops
+_EXCHANGE_CLIENT: Optional[ccxt.binanceusdm] = None
+_EXCHANGE_CONFIG_SIG: Optional[str] = None
+
+
+def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
+    """
+    Translates a canonical pair (e.g. 'BTC/USDT') to CCXT's exchange-specific market symbol.
+    For ccxt.binanceusdm (USDT-M Perpetual Futures in CCXT v4+), the unified symbol is 'BTC/USDT:USDT'.
+    Falls back gracefully if the market has already loaded or uses different notation.
+    """
+    if not symbol:
+        return symbol
+    clean = str(symbol).strip().upper()
+
+    # If it already includes the settle colon (e.g. BTC/USDT:USDT), return as-is
+    if ":" in clean:
+        return clean
+
+    # If markets are loaded in exchange, check against exchange.markets
+    try:
+        if exchange and hasattr(exchange, "markets") and exchange.markets:
+            if clean in exchange.markets:
+                return clean
+            # Check linear settle candidate: e.g. BTC/USDT -> BTC/USDT:USDT
+            if "/" in clean:
+                quote = clean.split("/")[1]
+                candidate = f"{clean}:{quote}"
+                if candidate in exchange.markets:
+                    return candidate
+            # Check market id (e.g. BTCUSDT)
+            raw_id = clean.replace("/", "")
+            for m_sym, m_data in exchange.markets.items():
+                if m_data.get("id") == raw_id:
+                    return m_sym
+    except Exception:
+        pass
+
+    # Standard default for Binance USDT-M futures: append :USDT
+    if "/" in clean and clean.endswith("/USDT"):
+        return f"{clean}:USDT"
+    elif "/" in clean:
+        quote = clean.split("/")[1]
+        return f"{clean}:{quote}"
+
+    return clean
+
+
+def to_canonical_symbol(symbol: str) -> str:
+    """
+    Translates CCXT exchange market symbols (e.g. 'BTC/USDT:USDT' or 'BTCUSDT')
+    back to the canonical dashboard format 'BTC/USDT'.
+    """
+    if not symbol:
+        return symbol
+    clean = str(symbol).strip().upper()
+    if ":" in clean:
+        return clean.split(":")[0]
+    return clean
+
+
 def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
     """
     Initializes Binance USDT-M Futures client with API key overrides from bot_config.
     Connects to live market data streams without testnet URL deprecation issues.
+    Caches the client instance to preserve loaded markets and avoid per-loop re-instantiation overhead.
     """
+    global _EXCHANGE_CLIENT, _EXCHANGE_CONFIG_SIG
+
     api_key = cfg.get("binance_api_key_override") or os.getenv("BINANCE_API_KEY", "")
     secret = cfg.get("binance_secret_override") or os.getenv("BINANCE_API_SECRET", "")
+    config_sig = f"{api_key}:{secret}"
+
+    if _EXCHANGE_CLIENT is not None and _EXCHANGE_CONFIG_SIG == config_sig:
+        return _EXCHANGE_CLIENT
 
     exchange = ccxt.binanceusdm({
         "apiKey": api_key,
@@ -105,6 +173,13 @@ def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
         }
     })
 
+    try:
+        exchange.load_markets()
+    except Exception as e:
+        print(f"[binance] Notice during load_markets: {e}")
+
+    _EXCHANGE_CLIENT = exchange
+    _EXCHANGE_CONFIG_SIG = config_sig
     return exchange
 
 
@@ -189,8 +264,9 @@ def handle_panic_close_all(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
         # 1. Cancel all open orders for tracked symbols
         for sym in cfg.get("symbols", []):
             try:
-                exchange.cancel_all_orders(sym)
-                print(f"[PANIC] Cancelled all open orders for {sym}")
+                ex_sym = resolve_exchange_symbol(exchange, sym)
+                exchange.cancel_all_orders(ex_sym)
+                print(f"[PANIC] Cancelled all open orders for {sym} ({ex_sym})")
             except Exception as e:
                 print(f"[PANIC] Order cancel error for {sym}: {e}")
 
@@ -262,8 +338,9 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
             for p in positions:
                 contracts = float(p.get("contracts", 0.0) or 0.0)
                 if contracts > 0:
+                    raw_sym = p.get("symbol", "")
                     active_positions_json.append({
-                        "symbol": p.get("symbol"),
+                        "symbol": to_canonical_symbol(raw_sym),
                         "side": p.get("side"),
                         "size": contracts,
                         "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
@@ -525,6 +602,7 @@ def manage_open_positions(
         for t in open_trades:
             trade_id = t["id"]
             symbol = t["symbol"]
+            ex_sym = resolve_exchange_symbol(exchange, symbol)
             side = t["side"]
             entry = float(t["entry_price"])
             sl = float(t["stop_loss"])
@@ -536,7 +614,7 @@ def manage_open_positions(
 
             # Fetch current ticker
             try:
-                ticker = exchange.fetch_ticker(symbol)
+                ticker = exchange.fetch_ticker(ex_sym)
                 current_price = float(ticker.get("last", entry))
             except Exception:
                 current_price = entry
@@ -568,7 +646,7 @@ def manage_open_positions(
                     close_side = "sell" if side == "LONG" else "buy"
                     try:
                         exchange.create_market_order(
-                            symbol,
+                            ex_sym,
                             close_side,
                             partial_qty,
                             params={"reduceOnly": True}
@@ -579,13 +657,13 @@ def manage_open_positions(
                     old_sl_id = t.get("sl_order_id")
                     if old_sl_id:
                         try:
-                            exchange.cancel_order(old_sl_id, symbol)
+                            exchange.cancel_order(old_sl_id, ex_sym)
                         except Exception as e:
                             print(f"[trade_mgmt] Cancel old SL warning: {e}")
 
                     try:
                         new_sl_order = exchange.create_order(
-                            symbol=symbol,
+                            symbol=ex_sym,
                             type="STOP_MARKET",
                             side=close_side,
                             amount=new_remaining_qty,
@@ -630,8 +708,8 @@ def manage_open_positions(
                 if not is_sim:
                     print(f"[trade_mgmt] Time-Stop triggered for {symbol} trade #{trade_id} ({bars_elapsed} bars >= {max_bars}). Closing at Market.")
                     try:
-                        exchange.cancel_all_orders(symbol)
-                        exchange.create_market_order(symbol, close_side, qty, params={"reduceOnly": True})
+                        exchange.cancel_all_orders(ex_sym)
+                        exchange.create_market_order(ex_sym, close_side, qty, params={"reduceOnly": True})
                     except Exception as e:
                         print(f"[trade_mgmt] Time stop execution warning: {e}")
                 else:
@@ -671,7 +749,7 @@ def manage_open_positions(
 
                 if not is_sim:
                     try:
-                        exchange.cancel_all_orders(symbol)
+                        exchange.cancel_all_orders(ex_sym)
                     except Exception:
                         pass
 
@@ -851,6 +929,8 @@ def scan_and_execute_signals(
         if symbol in quarantined_symbols:
             continue
 
+        ex_sym = resolve_exchange_symbol(exchange, symbol)
+
         try:
             # Check if there is already an open trade for this symbol
             existing = supabase.table("trade_executions").select("id").eq("symbol", symbol).eq("status", "OPEN").execute()
@@ -858,7 +938,7 @@ def scan_and_execute_signals(
                 continue
 
             # Fetch 15m OHLCV bars
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe="15m", limit=100)
+            ohlcv = exchange.fetch_ohlcv(ex_sym, timeframe="15m", limit=100)
             if not ohlcv or len(ohlcv) < 55:
                 continue
 
@@ -868,7 +948,7 @@ def scan_and_execute_signals(
             # Check funding rate
             funding_rate = 0.0
             try:
-                fr_info = exchange.fetch_funding_rate(symbol)
+                fr_info = exchange.fetch_funding_rate(ex_sym)
                 funding_rate = float(fr_info.get("fundingRate", 0.0) or 0.0) * 100.0 # to percentage
             except Exception:
                 funding_rate = 0.0
@@ -1008,7 +1088,7 @@ def scan_and_execute_signals(
                         if cfg.get("use_limit_maker_entry", True):
                             # Place Post-Only Limit Order
                             entry_order = exchange.create_order(
-                                symbol=symbol,
+                                symbol=ex_sym,
                                 type="LIMIT",
                                 side=order_side,
                                 amount=position_qty,
@@ -1017,12 +1097,12 @@ def scan_and_execute_signals(
                             )
                             exchange_order_id = str(entry_order.get("id"))
                         else:
-                            entry_order = exchange.create_market_order(symbol, order_side, position_qty)
+                            entry_order = exchange.create_market_order(ex_sym, order_side, position_qty)
                             exchange_order_id = str(entry_order.get("id"))
 
                         # Native Server-Side STOP_MARKET
                         sl_order = exchange.create_order(
-                            symbol=symbol,
+                            symbol=ex_sym,
                             type="STOP_MARKET",
                             side=opp_side,
                             amount=position_qty,
@@ -1036,7 +1116,7 @@ def scan_and_execute_signals(
 
                         # Native Server-Side TAKE_PROFIT_MARKET
                         tp_order = exchange.create_order(
-                            symbol=symbol,
+                            symbol=ex_sym,
                             type="TAKE_PROFIT_MARKET",
                             side=opp_side,
                             amount=position_qty,
