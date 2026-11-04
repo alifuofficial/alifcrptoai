@@ -889,6 +889,8 @@ def sync_market_and_macro_news(supabase: Client, symbols: List[str]) -> None:
 
 # --- MULTI-STRATEGY SCANNER & EXECUTION ---
 
+_SCAN_HEARTBEAT_COUNT = 0
+
 def scan_and_execute_signals(
     supabase: Client,
     exchange: ccxt.binanceusdm,
@@ -901,6 +903,9 @@ def scan_and_execute_signals(
     invokes DeepSeek Chief Quantitative Risk Officer with active guardrails,
     sizes positions safely, and dispatches native server-side Binance orders.
     """
+    global _SCAN_HEARTBEAT_COUNT
+    _SCAN_HEARTBEAT_COUNT += 1
+
     # 1. Macro Blackout Check
     macro_status = check_usd_macro_blackout()
     if macro_status.get("macro_blackout"):
@@ -916,13 +921,20 @@ def scan_and_execute_signals(
         return
 
     symbols = cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
-    active_strats = cfg.get("active_strategies", [])
+    active_strats = cfg.get("active_strategies") or [
+        "SMC_Liquidity_Sweep",
+        "ICT_OrderBlock_FVG",
+        "Supertrend_ADX_Momentum",
+        "EMA_Trend_Pullback",
+        "BB_Volatility_Breakout",
+        "RSI_Divergence_Reversal"
+    ]
     quarantined_symbols = cfg.get("quarantined_symbols", [])
     equity = float(account_info.get("equity", 0.0) or 0.0)
 
     # Detect if bot is running in Zero-Balance Analytical Mode
     is_zero_balance_mode = (equity <= 0) and not cfg.get("sandbox_mode", True)
-    if is_zero_balance_mode:
+    if is_zero_balance_mode and _SCAN_HEARTBEAT_COUNT % 4 == 1:
         print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits. Candidate setups are paper-tracked without live margin orders.")
 
     for symbol in symbols:
@@ -944,6 +956,7 @@ def scan_and_execute_signals(
 
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            latest_price = float(df["close"].iloc[-1])
 
             # Check funding rate
             funding_rate = 0.0
@@ -963,11 +976,16 @@ def scan_and_execute_signals(
             # Evaluate strategies
             candidate_setups = evaluate_enabled_strategies(df, active_strats)
             if not candidate_setups:
+                if _SCAN_HEARTBEAT_COUNT % 4 == 0:
+                    print(f"[scanner] {symbol} (${latest_price:,.2f}) -> 15m OHLCV checked across {len(active_strats)} quant strategies. No valid trigger on current bar. Actively monitoring...")
                 continue
+
+            print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} (Price: ${latest_price:,.2f})!")
 
             for setup in candidate_setups:
                 rvol = setup.get("rvol", 1.0)
                 if rvol < cfg.get("min_rvol", 1.2):
+                    print(f"[scanner] {symbol} {setup.get('strategy_name')} candidate skipped: RVOL {rvol:.2f}x < required {cfg.get('min_rvol', 1.2)}x volume threshold.")
                     continue
 
                 side = setup.get("side")

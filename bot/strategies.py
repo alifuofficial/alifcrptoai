@@ -663,6 +663,7 @@ def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str]) -> Li
     """
     Calculates technical indicators and runs all currently enabled strategies.
     Returns candidate setup dictionaries matching the unified schema.
+    Supports case-insensitive & underscore-resilient strategy name matching.
     """
     if df.empty or len(df) < 50:
         return []
@@ -671,14 +672,21 @@ def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str]) -> Li
     ind_df = calc_indicators(df)
     candidate_setups: List[Dict[str, Any]] = []
 
-    for strat_name in enabled_list:
-        handler = STRATEGY_REGISTRY.get(strat_name)
-        if handler:
+    # Build case-insensitive lookup
+    normalized_registry = {k.lower().replace("_", ""): (k, fn) for k, fn in STRATEGY_REGISTRY.items()}
+
+    # If enabled_list is empty, default to all registered strategies
+    targets = enabled_list if enabled_list else list(STRATEGY_REGISTRY.keys())
+
+    for item in targets:
+        key = str(item).strip().lower().replace("_", "")
+        if key in normalized_registry:
+            actual_name, handler = normalized_registry[key]
             try:
                 candidate = handler(ind_df)
                 if candidate:
                     candidate_setups.append(candidate)
             except Exception as exc:
-                print(f"[strategies] Error executing {strat_name}: {exc}")
+                print(f"[strategies] Error executing {actual_name}: {exc}")
 
     return candidate_setups
