@@ -57,6 +57,7 @@ export interface JournalTradeRecord {
   entry_rvol?: number | null;
   entry_scores: Record<string, any>;
   autopsy_completed: boolean;
+  is_simulated?: boolean;
   trader_notes?: string;
   emotion_or_grade?: string;
   user_rating?: number;
@@ -103,6 +104,7 @@ export default function TradingJournal({
   const [strategyFilter, setStrategyFilter] = useState<string>("ALL");
   const [outcomeFilter, setOutcomeFilter] = useState<string>("ALL");
   const [sessionFilter, setSessionFilter] = useState<string>("ALL");
+  const [modeFilter, setModeFilter] = useState<string>("ALL");
 
   // Detailed Deep-Dive Modal Inspector
   const [inspectTrade, setInspectTrade] = useState<JournalTradeRecord | null>(null);
@@ -195,6 +197,14 @@ export default function TradingJournal({
   // ---------------------------------------------------------------------------
   const filteredTrades = useMemo(() => {
     return trades.filter((t) => {
+      // Execution Mode Filter (Live vs Analytical)
+      const isSim =
+        Boolean(t.is_simulated) ||
+        String(t.exchange_order_id || "").startsWith("ANALYTICS_") ||
+        String(t.exchange_order_id || "").startsWith("sim_");
+      if (modeFilter === "LIVE" && isSim) return false;
+      if (modeFilter === "ANALYTICAL" && !isSim) return false;
+
       // Symbol Filter
       if (symbolFilter !== "ALL" && t.symbol !== symbolFilter) return false;
 
@@ -228,7 +238,7 @@ export default function TradingJournal({
 
       return true;
     });
-  }, [trades, symbolFilter, strategyFilter, outcomeFilter, sessionFilter, searchQuery]);
+  }, [trades, symbolFilter, strategyFilter, outcomeFilter, sessionFilter, searchQuery, modeFilter]);
 
   // ---------------------------------------------------------------------------
   // 3. TOP 5 INSTITUTIONAL KPIS
@@ -597,6 +607,17 @@ export default function TradingJournal({
             />
           </div>
 
+          {/* Execution Mode Filter (Live vs Analytical Paper) */}
+          <select
+            value={modeFilter}
+            onChange={(e) => setModeFilter(e.target.value as "ALL" | "LIVE" | "ANALYTICAL")}
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
+          >
+            <option value="ALL">All Modes (Live & Analytical)</option>
+            <option value="ANALYTICAL">Analytical Signals (Paper)</option>
+            <option value="LIVE">Live Binance Only</option>
+          </select>
+
           {/* Symbol Filter */}
           <select
             value={symbolFilter}
@@ -711,6 +732,10 @@ export default function TradingJournal({
                   const mae = Number(trade.mae_r) || 0;
                   const isWin = pnlR > 0;
                   const isClosed = trade.status !== "OPEN";
+                  const isSim =
+                    Boolean(trade.is_simulated) ||
+                    String(trade.exchange_order_id || "").startsWith("ANALYTICS_") ||
+                    String(trade.exchange_order_id || "").startsWith("sim_");
 
                   return (
                     <tr
@@ -736,11 +761,28 @@ export default function TradingJournal({
                         {trade.symbol}
                       </td>
 
-                      {/* Strategy Badge */}
+                      {/* Strategy Badge & Mode */}
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                          {trade.strategy_name?.replace(/_/g, " ")}
-                        </span>
+                        <div className="flex items-center space-x-1.5">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            {trade.strategy_name?.replace(/_/g, " ")}
+                          </span>
+                          {isSim ? (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200"
+                              title="Zero-Balance Analytical Signal (Hypothetical Paper Execution)"
+                            >
+                              PAPER
+                            </span>
+                          ) : (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title="Real Binance Margin Execution"
+                            >
+                              LIVE
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Side */}
@@ -775,21 +817,41 @@ export default function TradingJournal({
                         </div>
                       </td>
 
-                      {/* Net PnL ($ / R) */}
+                      {/* Net PnL ($ / R) & What-If Outcome */}
                       <td className="py-3 px-4 whitespace-nowrap tabular-nums font-bold">
                         {isClosed ? (
                           <div>
-                            <span className={isWin ? "text-emerald-600" : "text-rose-600"}>
-                              {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                            <div className="flex items-center space-x-1">
+                              <span className={isWin ? "text-emerald-600" : "text-rose-600"}>
+                                {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                              </span>
+                              <span
+                                className={`text-[11px] ${
+                                  isWin ? "text-emerald-600" : "text-rose-600"
+                                }`}
+                              >
+                                ({pnlR >= 0 ? "+" : ""}
+                                {pnlR.toFixed(2)}R)
+                              </span>
+                            </div>
+                            {isSim && (
+                              <div
+                                className={`text-[10px] font-semibold mt-0.5 ${
+                                  isWin ? "text-emerald-600" : "text-rose-600"
+                                }`}
+                              >
+                                {isWin ? "🎯 +2.2R WIN" : "🛑 -1.0R LOSS"}
+                              </div>
+                            )}
+                          </div>
+                        ) : isSim ? (
+                          <div>
+                            <span className="text-purple-600 font-semibold text-xs animate-pulse">
+                              ACTIVE SIGNAL
                             </span>
-                            <span
-                              className={`ml-1.5 text-[11px] ${
-                                isWin ? "text-emerald-600" : "text-rose-600"
-                              }`}
-                            >
-                              ({pnlR >= 0 ? "+" : ""}
-                              {pnlR.toFixed(2)}R)
-                            </span>
+                            <div className="text-[10px] text-textMuted font-normal">
+                              Paper Tracking
+                            </div>
                           </div>
                         ) : (
                           <span className="text-cyan-600 font-semibold animate-pulse">
@@ -989,6 +1051,43 @@ export default function TradingJournal({
                     <span className="font-bold text-textMain font-mono">{inspectTrade.status}</span>
                   </div>
                 </div>
+
+                {/* What-If Hypothetical Outcome Analysis Card */}
+                {(() => {
+                  const isSimInspect =
+                    Boolean(inspectTrade.is_simulated) ||
+                    String(inspectTrade.exchange_order_id || "").startsWith("ANALYTICS_") ||
+                    String(inspectTrade.exchange_order_id || "").startsWith("sim_");
+                  const pnlR = Number(inspectTrade.pnl_r || 0);
+                  const isHitTp = inspectTrade.status === "CLOSED_TP" || pnlR > 0;
+                  const isHitSl = inspectTrade.status === "CLOSED_SL" || pnlR < 0;
+
+                  return (
+                    <div className="p-3.5 rounded-xl bg-purple-50/80 border border-purple-200/90 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                          <span>💡</span> What-If Outcome Analysis
+                        </span>
+                        <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                          {isSimInspect ? "Analytical Signal (Paper)" : "Real Margin Execution"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-purple-950 leading-relaxed">
+                        {isHitTp
+                          ? `Target Hit! If you took this setup with $100 risk (1R), your realized return would be +$${(
+                              (pnlR || 2.2) * 100
+                            ).toFixed(2)} (+${(pnlR || 2.2).toFixed(2)}R) with zero account drawdown.`
+                          : isHitSl
+                          ? `Stop loss triggered. If you took this setup with $100 risk (1R), your loss would be strictly capped at -$100.00 (-1.00R) by quantitative risk limits.`
+                          : `Active signal in progress. Monitoring live mark price against Take Profit ($${Number(
+                              inspectTrade.take_profit || 0
+                            ).toFixed(2)}) and Stop Loss ($${Number(
+                              inspectTrade.stop_loss || 0
+                            ).toFixed(2)}). Potential payout at +2.2R target: +$220.00.`}
+                      </p>
+                    </div>
+                  );
+                })()}
 
                 {/* Autopsy Analysis if available */}
                 {inspectTrade.failure_category ? (

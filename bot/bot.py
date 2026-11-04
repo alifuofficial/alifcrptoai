@@ -532,6 +532,7 @@ def manage_open_positions(
             qty = float(t["qty"])
             breakeven_activated = bool(t.get("breakeven_activated", False))
             opened_at_str = t.get("opened_at")
+            is_sim = bool(t.get("is_simulated", False)) or str(t.get("exchange_order_id", "")).startswith("ANALYTICS_") or str(t.get("exchange_order_id", "")).startswith("sim_")
 
             # Fetch current ticker
             try:
@@ -557,48 +558,48 @@ def manage_open_positions(
                 cfg.get("enable_breakeven_partial", True) and 
                 not breakeven_activated):
 
-                print(f"[trade_mgmt] +1.0R reached for {symbol} trade #{trade_id}. Executing 50% partial TP and moving SL to BE!")
                 partial_qty = round(qty * 0.5, 4)
                 new_remaining_qty = round(qty - partial_qty, 4)
-
-                # 1. Close 50% via Market order
-                close_side = "sell" if side == "LONG" else "buy"
-                try:
-                    exchange.create_market_order(
-                        symbol,
-                        close_side,
-                        partial_qty,
-                        params={"reduceOnly": True}
-                    )
-                except Exception as e:
-                    print(f"[trade_mgmt] Partial market order warning: {e}")
-
-                # 2. Cancel old SL order on Binance
-                old_sl_id = t.get("sl_order_id")
-                if old_sl_id:
-                    try:
-                        exchange.cancel_order(old_sl_id, symbol)
-                    except Exception as e:
-                        print(f"[trade_mgmt] Cancel old SL warning: {e}")
-
-                # 3. Place new server-side STOP_MARKET at BE + fee buffer
                 be_sl_price = round(entry * 1.0015, 4) if side == "LONG" else round(entry * 0.9985, 4)
-                new_sl_id = None
-                try:
-                    new_sl_order = exchange.create_order(
-                        symbol=symbol,
-                        type="STOP_MARKET",
-                        side=close_side,
-                        amount=new_remaining_qty,
-                        params={
-                            "stopPrice": be_sl_price,
-                            "workingType": "MARK_PRICE",
-                            "reduceOnly": True
-                        }
-                    )
-                    new_sl_id = str(new_sl_order.get("id"))
-                except Exception as e:
-                    print(f"[trade_mgmt] Place BE SL warning: {e}")
+                new_sl_id = f"sim_be_sl_{int(time.time())}" if is_sim else None
+
+                if not is_sim:
+                    print(f"[trade_mgmt] +1.0R reached for {symbol} trade #{trade_id}. Executing 50% partial TP and moving SL to BE!")
+                    close_side = "sell" if side == "LONG" else "buy"
+                    try:
+                        exchange.create_market_order(
+                            symbol,
+                            close_side,
+                            partial_qty,
+                            params={"reduceOnly": True}
+                        )
+                    except Exception as e:
+                        print(f"[trade_mgmt] Partial market order warning: {e}")
+
+                    old_sl_id = t.get("sl_order_id")
+                    if old_sl_id:
+                        try:
+                            exchange.cancel_order(old_sl_id, symbol)
+                        except Exception as e:
+                            print(f"[trade_mgmt] Cancel old SL warning: {e}")
+
+                    try:
+                        new_sl_order = exchange.create_order(
+                            symbol=symbol,
+                            type="STOP_MARKET",
+                            side=close_side,
+                            amount=new_remaining_qty,
+                            params={
+                                "stopPrice": be_sl_price,
+                                "workingType": "MARK_PRICE",
+                                "reduceOnly": True
+                            }
+                        )
+                        new_sl_id = str(new_sl_order.get("id"))
+                    except Exception as e:
+                        print(f"[trade_mgmt] Place BE SL warning: {e}")
+                else:
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +1.0R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${be_sl_price:.4f}!")
 
                 # Update database record
                 supabase.table("trade_executions").update({
@@ -625,13 +626,16 @@ def manage_open_positions(
 
             max_bars = cfg.get("max_hold_bars", 20)
             if bars_elapsed >= max_bars and curr_r < 0.5 and not breakeven_activated:
-                print(f"[trade_mgmt] Time-Stop triggered for {symbol} trade #{trade_id} ({bars_elapsed} bars >= {max_bars}). Closing at Market.")
                 close_side = "sell" if side == "LONG" else "buy"
-                try:
-                    exchange.cancel_all_orders(symbol)
-                    exchange.create_market_order(symbol, close_side, qty, params={"reduceOnly": True})
-                except Exception as e:
-                    print(f"[trade_mgmt] Time stop execution warning: {e}")
+                if not is_sim:
+                    print(f"[trade_mgmt] Time-Stop triggered for {symbol} trade #{trade_id} ({bars_elapsed} bars >= {max_bars}). Closing at Market.")
+                    try:
+                        exchange.cancel_all_orders(symbol)
+                        exchange.create_market_order(symbol, close_side, qty, params={"reduceOnly": True})
+                    except Exception as e:
+                        print(f"[trade_mgmt] Time stop execution warning: {e}")
+                else:
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) Time-Stop triggered for {symbol} trade #{trade_id} ({bars_elapsed} bars >= {max_bars}). Simulating close.")
 
                 exit_price = current_price
                 pnl_usdt = round((exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty, 2)
@@ -661,13 +665,15 @@ def manage_open_positions(
                 pnl_usdt = round((exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty, 2)
                 pnl_r = round((exit_price - entry) / risk_dist if side == "LONG" else (entry - exit_price) / risk_dist, 2)
 
-                print(f"[trade_mgmt] Trade #{trade_id} on {symbol} closed: {status} at price {exit_price:.4f} (PnL: {pnl_usdt:+.2f} USDT)")
+                sim_tag = "(ANALYTICAL SIGNAL) " if is_sim else ""
+                outcome_label = "WIN (WOULD HAVE WON)" if hit_tp else "LOSS (WOULD HAVE LOST)"
+                print(f"[trade_mgmt] {sim_tag}Trade #{trade_id} on {symbol} closed: {status} ({outcome_label}) at price {exit_price:.4f} (PnL: {pnl_usdt:+.2f} USDT, {pnl_r:+.2f}R)")
 
-                # Cancel remaining orders on exchange
-                try:
-                    exchange.cancel_all_orders(symbol)
-                except Exception:
-                    pass
+                if not is_sim:
+                    try:
+                        exchange.cancel_all_orders(symbol)
+                    except Exception:
+                        pass
 
                 t_closed = {
                     **t,
@@ -836,9 +842,10 @@ def scan_and_execute_signals(
     quarantined_symbols = cfg.get("quarantined_symbols", [])
     equity = float(account_info.get("equity", 0.0) or 0.0)
 
-    # If real wallet equity is zero or insufficient, skip order execution to prevent API rejections
-    if equity <= 0 and not cfg.get("sandbox_mode", True):
-        return
+    # Detect if bot is running in Zero-Balance Analytical Mode
+    is_zero_balance_mode = (equity <= 0) and not cfg.get("sandbox_mode", True)
+    if is_zero_balance_mode:
+        print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits. Candidate setups are paper-tracked without live margin orders.")
 
     for symbol in symbols:
         if symbol in quarantined_symbols:
@@ -963,79 +970,89 @@ def scan_and_execute_signals(
                     print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score}, Veto: {veto_triggered} ({veto_reason})")
                     continue
 
-                # --- POSITION SIZING ---
+                # --- POSITION SIZING & BENCHMARK ALLOCATION ---
                 # Sizing tier: 75-84 = 0.5x risk; 85+ = 1.0x risk
                 size_multiplier = 1.0 if total_score >= 85 else 0.5
                 effective_risk_pct = risk_pct * size_multiplier
-                risk_usdt = equity * effective_risk_pct
+                # If balance is zero, benchmark sizing against standard $10,000 reference equity ($100 risk at 1%)
+                nominal_equity = equity if equity > 0 else 10000.0
+                risk_usdt = nominal_equity * effective_risk_pct
 
                 entry_price = float(setup["entry"])
                 sl_price = float(setup["sl"])
                 tp_price = float(setup["tp"])
                 risk_per_unit = max(abs(entry_price - sl_price), 1e-5)
-                position_qty = round(risk_usdt / risk_per_unit, 3)
+                position_qty = round(risk_usdt / risk_per_unit, 4)
 
                 if position_qty <= 0:
-                    continue
+                    position_qty = 0.01
 
-                print(f"[execution] Executing {side} on {symbol}: Qty {position_qty}, Score {total_score}/100, Sizing Multiplier {size_multiplier}x")
+                is_simulated = is_zero_balance_mode or cfg.get("sandbox_mode", True)
 
-                # --- EXCHANGE ORDER EXECUTION ---
+                # --- ORDER DISPATCH / ANALYTICAL LOGGING ---
                 order_side = "buy" if side == "LONG" else "sell"
                 opp_side = "sell" if side == "LONG" else "buy"
                 exchange_order_id = "mock_order_1"
                 sl_order_id = "mock_sl_1"
                 tp_order_id = "mock_tp_1"
 
-                try:
-                    if cfg.get("use_limit_maker_entry", True):
-                        # Place Post-Only Limit Order
-                        entry_order = exchange.create_order(
+                if is_simulated:
+                    mode_label = "ANALYTICAL SIGNAL (Zero-Balance Paper Tracking)" if is_zero_balance_mode else "SANDBOX DEMO"
+                    print(f"[execution] {mode_label} recorded for {symbol} {side}: Entry ${entry_price:.4f}, SL ${sl_price:.4f}, TP ${tp_price:.4f} (+2.2R), Score {total_score}/100")
+                    exchange_order_id = f"ANALYTICS_{int(time.time())}"
+                    sl_order_id = f"ANALYTICS_SL_{int(time.time())}"
+                    tp_order_id = f"ANALYTICS_TP_{int(time.time())}"
+                else:
+                    print(f"[execution] Live Binance Futures Order Dispatch for {side} on {symbol}: Qty {position_qty}, Score {total_score}/100")
+                    try:
+                        if cfg.get("use_limit_maker_entry", True):
+                            # Place Post-Only Limit Order
+                            entry_order = exchange.create_order(
+                                symbol=symbol,
+                                type="LIMIT",
+                                side=order_side,
+                                amount=position_qty,
+                                price=entry_price,
+                                params={"timeInForce": "GTX"} # Post-Only Maker
+                            )
+                            exchange_order_id = str(entry_order.get("id"))
+                        else:
+                            entry_order = exchange.create_market_order(symbol, order_side, position_qty)
+                            exchange_order_id = str(entry_order.get("id"))
+
+                        # Native Server-Side STOP_MARKET
+                        sl_order = exchange.create_order(
                             symbol=symbol,
-                            type="LIMIT",
-                            side=order_side,
+                            type="STOP_MARKET",
+                            side=opp_side,
                             amount=position_qty,
-                            price=entry_price,
-                            params={"timeInForce": "GTX"} # Post-Only Maker
+                            params={
+                                "stopPrice": sl_price,
+                                "workingType": "MARK_PRICE",
+                                "reduceOnly": True
+                            }
                         )
-                        exchange_order_id = str(entry_order.get("id"))
-                    else:
-                        entry_order = exchange.create_market_order(symbol, order_side, position_qty)
-                        exchange_order_id = str(entry_order.get("id"))
+                        sl_order_id = str(sl_order.get("id"))
 
-                    # Native Server-Side STOP_MARKET
-                    sl_order = exchange.create_order(
-                        symbol=symbol,
-                        type="STOP_MARKET",
-                        side=opp_side,
-                        amount=position_qty,
-                        params={
-                            "stopPrice": sl_price,
-                            "workingType": "MARK_PRICE",
-                            "reduceOnly": True
-                        }
-                    )
-                    sl_order_id = str(sl_order.get("id"))
+                        # Native Server-Side TAKE_PROFIT_MARKET
+                        tp_order = exchange.create_order(
+                            symbol=symbol,
+                            type="TAKE_PROFIT_MARKET",
+                            side=opp_side,
+                            amount=position_qty,
+                            params={
+                                "stopPrice": tp_price,
+                                "workingType": "MARK_PRICE",
+                                "reduceOnly": True
+                            }
+                        )
+                        tp_order_id = str(tp_order.get("id"))
 
-                    # Native Server-Side TAKE_PROFIT_MARKET
-                    tp_order = exchange.create_order(
-                        symbol=symbol,
-                        type="TAKE_PROFIT_MARKET",
-                        side=opp_side,
-                        amount=position_qty,
-                        params={
-                            "stopPrice": tp_price,
-                            "workingType": "MARK_PRICE",
-                            "reduceOnly": True
-                        }
-                    )
-                    tp_order_id = str(tp_order.get("id"))
-
-                except Exception as order_exc:
-                    print(f"[execution] Binance order submission notice (testnet/sandbox): {order_exc}")
-                    exchange_order_id = f"sim_{int(time.time())}"
-                    sl_order_id = f"sim_sl_{int(time.time())}"
-                    tp_order_id = f"sim_tp_{int(time.time())}"
+                    except Exception as order_exc:
+                        print(f"[execution] Binance order submission fallback: {order_exc}")
+                        exchange_order_id = f"sim_{int(time.time())}"
+                        sl_order_id = f"sim_sl_{int(time.time())}"
+                        tp_order_id = f"sim_tp_{int(time.time())}"
 
                 # Insert into trade_executions
                 new_trade_record = {
@@ -1059,7 +1076,10 @@ def scan_and_execute_signals(
                     "entry_scores": {
                         "total_score": total_score,
                         "rubric": rubric
-                    }
+                    },
+                    "is_simulated": is_simulated,
+                    "trader_notes": "ANALYTICAL SIGNAL: Zero-Balance Paper Tracking (Live Market Simulation)" if is_zero_balance_mode else "",
+                    "emotion_or_grade": "A-Setup"
                 }
                 res = supabase.table("trade_executions").insert(new_trade_record).execute()
                 inserted_trade = res.data[0] if res.data else new_trade_record

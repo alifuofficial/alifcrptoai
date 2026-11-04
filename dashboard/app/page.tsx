@@ -154,6 +154,7 @@ interface TradeExecution {
   mae_r: number;
   entry_rvol: number;
   entry_scores?: any;
+  is_simulated?: boolean;
   opened_at: string;
   closed_at?: string | null;
 }
@@ -1496,6 +1497,36 @@ export default function CommandCenterPage() {
                 <h2 className="text-xl font-semibold tracking-tight">Executive Overview &amp; Telemetry</h2>
               </div>
 
+              {/* Zero-Balance Analytical Mode Banner */}
+              {Number(latestSnapshot?.equity_usdt ?? 0) <= 0 && !config?.sandbox_mode && (
+                <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 border border-purple-200/80 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-start sm:items-center space-x-3">
+                    <div className="p-2.5 bg-purple-600 text-white rounded-lg shrink-0 mt-0.5 sm:mt-0 shadow-xs">
+                      <BrainCircuit className="w-5 h-5 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
+                          Analytical Mode Active
+                        </span>
+                        <span className="text-xs font-bold text-purple-900">
+                          Binance Balance: $0.00
+                        </span>
+                      </div>
+                      <p className="text-xs text-purple-800 mt-1 leading-relaxed">
+                        Continuous 15m candlestick scanning and DeepSeek AI Risk Audits are actively running. Candidate setups are tracked in paper mode with exact Entry, SL, and TP (+2.2R) targets so you never miss an edge while funding your account.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveSection("audits")}
+                    className="shrink-0 px-3.5 py-1.5 text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
+                  >
+                    View AI Audits &rarr;
+                  </button>
+                </div>
+              )}
+
               {/* KPI CARDS GRID */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 {/* Card 1 */}
@@ -1926,10 +1957,33 @@ export default function CommandCenterPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {openTrades.map((t) => (
+                      {openTrades.map((t) => {
+                        const isSim =
+                          Boolean(t.is_simulated) ||
+                          String(t.exchange_order_id || "").startsWith("ANALYTICS_") ||
+                          String(t.exchange_order_id || "").startsWith("sim_");
+
+                        return (
                         <tr key={t.id} className="hover:bg-slate-50 transition-colors">
                           <td className="py-3.5 px-4">
-                            <div className="font-semibold text-textMain">{t.symbol}</div>
+                            <div className="flex items-center space-x-1.5">
+                              <span className="font-semibold text-textMain">{t.symbol}</span>
+                              {isSim ? (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 text-purple-700 border border-purple-200"
+                                  title="Zero-Balance Analytical Signal (Paper Tracking)"
+                                >
+                                  ANALYTICAL
+                                </span>
+                              ) : (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  title="Real Binance Margin Execution"
+                                >
+                                  LIVE
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-brand-600">{t.strategy_name}</div>
                           </td>
                           <td className="py-3.5 px-4 text-center">
@@ -1973,7 +2027,8 @@ export default function CommandCenterPage() {
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -2361,6 +2416,21 @@ export default function CommandCenterPage() {
                   Pre-execution Chief Quantitative Risk Officer audits with required flaw deductions and discrete scores
                 </p>
               </div>
+
+              {/* Zero Balance Analytical Scanner Banner */}
+              {Number(latestSnapshot?.equity_usdt ?? 0) <= 0 && !config?.sandbox_mode && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center space-x-2.5">
+                    <BrainCircuit className="w-4 h-4 text-purple-600 animate-pulse shrink-0" />
+                    <span className="text-purple-900 font-medium leading-relaxed">
+                      Zero-Balance Analytical Mode: DeepSeek Chief Risk Officer is actively evaluating candidate setups in real time. Passed signals are recorded in paper execution mode with exact Entry, SL, and TP targets.
+                    </span>
+                  </div>
+                  <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-purple-200/80 text-purple-900 border border-purple-300">
+                    SCANNING LIVE
+                  </span>
+                </div>
+              )}
 
               {recentAudits.length === 0 ? (
                 <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">

@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS trade_executions (
     entry_rvol NUMERIC,
     entry_scores JSONB NOT NULL DEFAULT '{}'::JSONB,
     autopsy_completed BOOLEAN NOT NULL DEFAULT false,
+    is_simulated BOOLEAN NOT NULL DEFAULT false,
     trader_notes TEXT NOT NULL DEFAULT '',
     emotion_or_grade TEXT NOT NULL DEFAULT 'A-Setup',
     user_rating INT NOT NULL DEFAULT 0 CHECK (user_rating BETWEEN 0 AND 5),
@@ -437,6 +438,7 @@ BEGIN
     ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS emotion_or_grade TEXT DEFAULT 'A-Setup';
     ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS user_rating INT DEFAULT 0;
     ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS fees_usdt NUMERIC DEFAULT 0;
+    ALTER TABLE trade_executions ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN DEFAULT false;
 END $$;
 
 -- 12. ENSURE TRADING JOURNAL VIEW IS CREATED
