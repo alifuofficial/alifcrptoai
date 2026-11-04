@@ -890,6 +890,7 @@ def sync_market_and_macro_news(supabase: Client, symbols: List[str]) -> None:
 # --- MULTI-STRATEGY SCANNER & EXECUTION ---
 
 _SCAN_HEARTBEAT_COUNT = 0
+_AUDITED_CANDLE_KEYS: Dict[str, float] = {}
 
 def scan_and_execute_signals(
     supabase: Client,
@@ -996,6 +997,18 @@ def scan_and_execute_signals(
                 if not check_correlated_exposure(supabase, side, risk_pct, cfg.get("max_directional_exposure_pct", 0.015)):
                     continue
 
+                # Check if this exact setup has already been audited on this 15m candle
+                global _AUDITED_CANDLE_KEYS
+                candle_ts = int(ohlcv[-1][0]) if ohlcv else int(time.time() // 900 * 900)
+                dedup_key = f"{symbol}:{strat_name}:{side}:{candle_ts}"
+
+                now_ts = time.time()
+                if len(_AUDITED_CANDLE_KEYS) > 300:
+                    _AUDITED_CANDLE_KEYS = {k: v for k, v in _AUDITED_CANDLE_KEYS.items() if now_ts - v < 7200}
+
+                if dedup_key in _AUDITED_CANDLE_KEYS:
+                    continue
+
                 # Query up to 5 active guardrail lessons for this symbol/strategy
                 lessons_query = (
                     supabase.table("bot_lessons")
@@ -1062,6 +1075,7 @@ def scan_and_execute_signals(
                     },
                     "news_context": headlines
                 }).execute()
+                _AUDITED_CANDLE_KEYS[dedup_key] = time.time()
 
                 min_score = cfg.get("min_score", 75)
                 if veto_triggered or total_score < min_score:
