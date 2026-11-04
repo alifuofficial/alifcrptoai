@@ -1786,7 +1786,7 @@ export default function CommandCenterPage() {
                   ) : (
                     <div className="p-4 space-y-2">
                       {recentAudits.slice(0, 3).map((a) => {
-                        const isVetoed = a.veto_triggered || a.total_score < (config?.min_score || 75);
+                        const isVetoed = a.veto_triggered || a.total_score < (config?.min_score || 65);
                         return (
                           <div
                             key={a.id}
@@ -2439,7 +2439,7 @@ export default function CommandCenterPage() {
               ) : (
                 <div className="space-y-4">
                   {recentAudits.map((audit) => {
-                    const isVetoed = audit.veto_triggered || audit.total_score < (config?.min_score || 75);
+                    const isVetoed = audit.veto_triggered || audit.total_score < (config?.min_score || 65);
                     const breakdown = audit.rubric_breakdown || {};
 
                     return (
@@ -3066,19 +3066,50 @@ export default function CommandCenterPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-textMain mb-1">
-                      Min DeepSeek Score: {formSettings.min_score || 75}
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-textMain">
+                        Min DeepSeek Score: <span className="text-brand-600 font-bold">{formSettings.min_score || 65} pts</span>
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, min_score: 60 })}
+                          className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                            formSettings.min_score === 60 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
+                          }`}
+                        >
+                          Aggressive (60)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, min_score: 68 })}
+                          className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                            formSettings.min_score === 68 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
+                          }`}
+                        >
+                          Balanced (68)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, min_score: 75 })}
+                          className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                            formSettings.min_score === 75 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
+                          }`}
+                        >
+                          Strict (75)
+                        </button>
+                      </div>
+                    </div>
                     <input
                       type="range"
-                      min="70"
+                      min="50"
                       max="95"
                       step="1"
-                      value={formSettings.min_score || 75}
+                      value={formSettings.min_score || 65}
                       onChange={(e) => setFormSettings({ ...formSettings, min_score: parseInt(e.target.value) })}
                       className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-textMuted">Range: 70 to 95 Points</span>
+                    <span className="text-[10px] text-textMuted">Range: 50 to 95 Points. (60–68 catches verified technical setups during quiet macro sessions).</span>
                   </div>
 
                   <div>
@@ -3181,9 +3212,58 @@ export default function CommandCenterPage() {
 
               {/* Watchlist Symbols */}
               <div className="bg-surface border border-border rounded-lg p-6 space-y-3">
-                <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider">
-                  Watchlist Symbols (Binance USDT-M Futures)
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider">
+                    Watchlist Symbols (Binance USDT-M Futures)
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          symbols: ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-textMain rounded transition-colors"
+                    >
+                      Core 3
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          symbols: [
+                            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+                            "DOGE/USDT", "ADA/USDT", "SUI/USDT", "LINK/USDT", "AVAX/USDT"
+                          ],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-brand-50 hover:bg-brand-100 text-brand-700 rounded transition-colors"
+                    >
+                      Top 10 Volume
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          symbols: [
+                            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+                            "DOGE/USDT", "ADA/USDT", "SUI/USDT", "LINK/USDT", "AVAX/USDT",
+                            "PEPE/USDT", "NEAR/USDT", "INJ/USDT", "TIA/USDT", "APT/USDT",
+                            "ARB/USDT", "OP/USDT", "LTC/USDT", "UNI/USDT", "DOT/USDT",
+                            "1000SHIB/USDT", "FTM/USDT", "WIF/USDT", "FET/USDT", "RENDER/USDT"
+                          ],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-brand-600 hover:bg-brand-700 text-white rounded transition-colors shadow-xs"
+                    >
+                      Top 25 Futures (Recommended)
+                    </button>
+                  </div>
+                </div>
                 <input
                   type="text"
                   value={(formSettings.symbols || []).join(", ")}
@@ -3196,7 +3276,10 @@ export default function CommandCenterPage() {
                   placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
                   className="w-full rounded-md border border-border bg-slate-50 py-2.5 px-4 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
                 />
-                <span className="text-[10px] text-textMuted">Comma-separated ccxt pair identifiers.</span>
+                <div className="flex items-center justify-between text-[10px] text-textMuted">
+                  <span>Comma-separated CCXT pair identifiers.</span>
+                  <span>Active count: <strong className="text-textMain font-semibold">{(formSettings.symbols || []).length} pairs</strong></span>
+                </div>
               </div>
 
               {/* Dynamic AI Base URL & Routing */}

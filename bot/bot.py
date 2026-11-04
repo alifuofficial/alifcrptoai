@@ -244,7 +244,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         ],
         "timeframe": "15m",
         "risk_pct": 0.01,
-        "min_score": 75,
+        "min_score": 65,
         "min_rvol": 1.2,
         "enable_breakeven_partial": True,
         "max_directional_exposure_pct": 0.015,
@@ -941,7 +941,10 @@ def scan_and_execute_signals(
         print(f"[scanner] Current UTC hour ({current_utc_hour}) is blocked in bot_config. Skipping scan.")
         return
 
-    symbols = cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+    symbols = cfg.get("symbols") or [
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+        "DOGE/USDT", "ADA/USDT", "SUI/USDT", "LINK/USDT", "AVAX/USDT"
+    ]
     active_strats = cfg.get("active_strategies") or [
         "SMC_Liquidity_Sweep",
         "ICT_OrderBlock_FVG",
@@ -1106,14 +1109,14 @@ def scan_and_execute_signals(
                 }).execute()
                 _AUDITED_CANDLE_KEYS[dedup_key] = time.time()
 
-                min_score = cfg.get("min_score", 75)
+                min_score = cfg.get("min_score", 65)
                 if veto_triggered or total_score < min_score:
                     print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score}, Veto: {veto_triggered} ({veto_reason})")
                     continue
 
                 # --- POSITION SIZING & BENCHMARK ALLOCATION ---
-                # Sizing tier: 75-84 = 0.5x risk; 85+ = 1.0x risk
-                size_multiplier = 1.0 if total_score >= 85 else 0.5
+                # Sizing tier: 60-79 = 0.5x risk; 80+ = 1.0x risk
+                size_multiplier = 1.0 if total_score >= 80 else 0.5
                 effective_risk_pct = risk_pct * size_multiplier
                 # If balance is zero, benchmark sizing against standard $10,000 reference equity ($100 risk at 1%)
                 nominal_equity = equity if equity > 0 else 10000.0
