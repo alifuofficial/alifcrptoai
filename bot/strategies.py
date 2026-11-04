@@ -16,7 +16,16 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 
 from smartmoneyconcepts import smc
-import pandas_ta as ta
+
+# Resilient Technical Analysis import: pandas-ta-classic (preferred on pandas 2.0+ / Python 3.12+)
+# with transparent fallback to legacy pandas-ta
+try:
+    import pandas_ta_classic as ta
+except ImportError:
+    try:
+        import pandas_ta as ta
+    except ImportError:
+        ta = None
 
 
 def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -281,9 +290,78 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _calc_supertrend_adx_math(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0, adx_length: int = 14):
+    """
+    Pure NumPy/Pandas mathematical calculation of Supertrend & ADX.
+    Ensures uninterrupted execution if third-party ta accessors encounter environment issues.
+    """
+    try:
+        high = df["high"].astype(float).values
+        low = df["low"].astype(float).values
+        close = df["close"].astype(float).values
+        n = len(df)
+        if n < length + 2:
+            return None, None, None, None
+
+        # 1. True Range & ATR
+        hl = high - low
+        hc = np.abs(high - np.roll(close, 1))
+        hc[0] = hl[0]
+        lc = np.abs(low - np.roll(close, 1))
+        lc[0] = hl[0]
+        tr = np.maximum(hl, np.maximum(hc, lc))
+        atr = pd.Series(tr).ewm(span=length, adjust=False).mean().values
+
+        # 2. Supertrend Bands & Direction
+        hl2 = (high + low) / 2.0
+        upper_band = hl2 + (multiplier * atr)
+        lower_band = hl2 - (multiplier * atr)
+
+        st_direction = np.ones(n, dtype=int)
+        st_line = np.zeros(n, dtype=float)
+
+        for i in range(1, n):
+            if close[i - 1] > upper_band[i - 1]:
+                upper_band[i] = max(upper_band[i], upper_band[i - 1])
+            if close[i - 1] < lower_band[i - 1]:
+                lower_band[i] = min(lower_band[i], lower_band[i - 1])
+
+            if close[i] > upper_band[i - 1]:
+                st_direction[i] = 1
+            elif close[i] < lower_band[i - 1]:
+                st_direction[i] = -1
+            else:
+                st_direction[i] = st_direction[i - 1]
+                if st_direction[i] == 1 and lower_band[i] < lower_band[i - 1]:
+                    lower_band[i] = lower_band[i - 1]
+                if st_direction[i] == -1 and upper_band[i] > upper_band[i - 1]:
+                    upper_band[i] = upper_band[i - 1]
+
+            st_line[i] = lower_band[i] if st_direction[i] == 1 else upper_band[i]
+
+        # 3. Directional Movement & ADX
+        up_move = high[1:] - high[:-1]
+        down_move = low[:-1] - low[1:]
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        plus_dm_s = pd.Series(np.insert(plus_dm, 0, 0.0)).ewm(span=adx_length, adjust=False).mean()
+        minus_dm_s = pd.Series(np.insert(minus_dm, 0, 0.0)).ewm(span=adx_length, adjust=False).mean()
+        atr_s = pd.Series(tr).ewm(span=adx_length, adjust=False).mean()
+
+        plus_di = 100.0 * (plus_dm_s / (atr_s + 1e-9))
+        minus_di = 100.0 * (minus_dm_s / (atr_s + 1e-9))
+        dx = 100.0 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)
+        adx = dx.ewm(span=adx_length, adjust=False).mean().values
+
+        return int(st_direction[-1]), int(st_direction[-2]), float(st_line[-1]), float(adx[-1])
+    except Exception:
+        return None, None, None, None
+
+
 def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     """
-    Supertrend + ADX Momentum Strategy (pandas-ta-classic library):
+    Supertrend + ADX Momentum Strategy (pandas-ta-classic library with auto-math fallback):
     1. Computes Supertrend (10, 3.0) and ADX (14).
     2. Detects direction flip on latest closed candle (from -1 to 1 for LONG, or 1 to -1 for SHORT).
     3. Confirms trend strength: ADX_14 > 25 and RVOL >= 1.2.
@@ -292,31 +370,34 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     if len(df) < 30:
         return None
 
+    curr_dir = None
+    prev_dir = None
+    st_line = None
+    adx_val = None
+
+    # Step 1: Attempt standard accessor calculation via pandas-ta-classic
     try:
-        # Use pandas_ta accessor
-        st = df.ta.supertrend(length=10, multiplier=3.0)
-        adx = df.ta.adx(length=14)
+        if hasattr(df, "ta"):
+            st = df.ta.supertrend(length=10, multiplier=3.0)
+            adx = df.ta.adx(length=14)
+            if st is not None and adx is not None and not st.empty and not adx.empty:
+                dir_cols = [c for c in st.columns if "SUPERTd" in c or "d" in c.lower()]
+                line_cols = [c for c in st.columns if c.startswith("SUPERT_")]
+                adx_cols = [c for c in adx.columns if c.startswith("ADX_")]
+                if dir_cols and line_cols and adx_cols:
+                    curr_dir = int(st[dir_cols[0]].iloc[-1])
+                    prev_dir = int(st[dir_cols[0]].iloc[-2])
+                    st_line = float(st[line_cols[0]].iloc[-1])
+                    adx_val = float(adx[adx_cols[0]].iloc[-1])
     except Exception:
+        pass
+
+    # Step 2: Resilient fallback to pure math if accessor returned None
+    if curr_dir is None or prev_dir is None or st_line is None or adx_val is None:
+        curr_dir, prev_dir, st_line, adx_val = _calc_supertrend_adx_math(df, length=10, multiplier=3.0, adx_length=14)
+
+    if curr_dir is None or prev_dir is None or st_line is None or adx_val is None:
         return None
-
-    if st is None or adx is None or st.empty or adx.empty:
-        return None
-
-    # Identify direction and line columns from supertrend
-    dir_cols = [c for c in st.columns if "SUPERTd" in c or "d" in c.lower()]
-    line_cols = [c for c in st.columns if c.startswith("SUPERT_")]
-    adx_cols = [c for c in adx.columns if c.startswith("ADX_")]
-
-    if not dir_cols or not line_cols or not adx_cols:
-        return None
-
-    dir_col = dir_cols[0]
-    line_col = line_cols[0]
-    adx_col = adx_cols[0]
-
-    curr_dir = int(st[dir_col].iloc[-1])
-    prev_dir = int(st[dir_col].iloc[-2])
-    adx_val = float(adx[adx_col].iloc[-1])
 
     curr = df.iloc[-1]
     entry = float(curr["close"])
