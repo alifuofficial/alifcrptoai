@@ -96,11 +96,26 @@ def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
     """
     Translates a canonical pair (e.g. 'BTC/USDT') to CCXT's exchange-specific market symbol.
     For ccxt.binanceusdm (USDT-M Perpetual Futures in CCXT v4+), the unified symbol is 'BTC/USDT:USDT'.
-    Falls back gracefully if the market has already loaded or uses different notation.
+    Auto-corrects user typos such as 'SUI/USD' -> 'SUI/USDT' or 'INJ/USDTT' -> 'INJ/USDT'.
     """
     if not symbol:
         return symbol
     clean = str(symbol).strip().upper()
+
+    # Self-healing typo correction (e.g. 'SUI/USD' -> 'SUI/USDT', 'INJ/USDTT' -> 'INJ/USDT')
+    if "/" in clean:
+        base, quote = clean.split("/", 1)
+        if quote in ("USD", "USDTT", "UDST", "USTD"):
+            clean = f"{base}/USDT"
+    elif not "/" in clean and not ":" in clean:
+        if clean.endswith("USDTT"):
+            clean = f"{clean[:-5]}/USDT"
+        elif clean.endswith("USDT"):
+            clean = f"{clean[:-4]}/USDT"
+        elif clean.endswith("USD"):
+            clean = f"{clean[:-3]}/USDT"
+        else:
+            clean = f"{clean}/USDT"
 
     # If it already includes the settle colon (e.g. BTC/USDT:USDT), return as-is
     if ":" in clean:

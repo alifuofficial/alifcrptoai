@@ -408,8 +408,6 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     if adx_val < 25.0 or rvol < 1.2:
         return None
 
-    st_line = float(st[line_col].iloc[-1])
-
     # --- Bullish Supertrend Flip (-1 -> 1) ---
     if prev_dir == -1 and curr_dir == 1:
         sl = st_line if st_line < entry else (entry - (1.5 * atr))
