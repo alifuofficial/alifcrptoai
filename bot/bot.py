@@ -244,7 +244,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         ],
         "timeframe": "15m",
         "risk_pct": 0.01,
-        "min_score": 65,
+        "min_score": 70,
         "min_rvol": 1.2,
         "enable_breakeven_partial": True,
         "max_directional_exposure_pct": 0.015,
@@ -1109,7 +1109,7 @@ def scan_and_execute_signals(
                 }).execute()
                 _AUDITED_CANDLE_KEYS[dedup_key] = time.time()
 
-                min_score = cfg.get("min_score", 65)
+                min_score = cfg.get("min_score", 70)
                 if veto_triggered or total_score < min_score:
                     print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score}, Veto: {veto_triggered} ({veto_reason})")
                     continue

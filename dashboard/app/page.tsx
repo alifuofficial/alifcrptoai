@@ -3068,26 +3068,17 @@ export default function CommandCenterPage() {
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-semibold text-textMain">
-                        Min DeepSeek Score: <span className="text-brand-600 font-bold">{formSettings.min_score || 65} pts</span>
+                        Min DeepSeek Score: <span className="text-brand-600 font-bold">{formSettings.min_score || 70} pts</span>
                       </label>
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setFormSettings({ ...formSettings, min_score: 60 })}
+                          onClick={() => setFormSettings({ ...formSettings, min_score: 70 })}
                           className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
-                            formSettings.min_score === 60 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
+                            formSettings.min_score === 70 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
                           }`}
                         >
-                          Aggressive (60)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setFormSettings({ ...formSettings, min_score: 68 })}
-                          className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
-                            formSettings.min_score === 68 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
-                          }`}
-                        >
-                          Balanced (68)
+                          Responsive (70)
                         </button>
                         <button
                           type="button"
@@ -3096,7 +3087,16 @@ export default function CommandCenterPage() {
                             formSettings.min_score === 75 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
                           }`}
                         >
-                          Strict (75)
+                          Balanced (75)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, min_score: 80 })}
+                          className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                            formSettings.min_score === 80 ? "bg-brand-600 text-white" : "bg-slate-100 text-textMuted hover:bg-slate-200"
+                          }`}
+                        >
+                          Strict (80)
                         </button>
                       </div>
                     </div>
@@ -3105,11 +3105,13 @@ export default function CommandCenterPage() {
                       min="50"
                       max="95"
                       step="1"
-                      value={formSettings.min_score || 65}
+                      value={formSettings.min_score || 70}
                       onChange={(e) => setFormSettings({ ...formSettings, min_score: parseInt(e.target.value) })}
                       className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-textMuted">Range: 50 to 95 Points. (60–68 catches verified technical setups during quiet macro sessions).</span>
+                    <span className="text-[10px] text-textMuted">
+                      Range: 50 to 95 Points. (70 is standard; to unlock &lt;70, run the SQL migration in Supabase).
+                    </span>
                   </div>
 
                   <div>

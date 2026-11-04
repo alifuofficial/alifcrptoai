@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     ],
     timeframe TEXT NOT NULL DEFAULT '15m',
     risk_pct NUMERIC NOT NULL DEFAULT 0.01 CHECK (risk_pct BETWEEN 0.0025 AND 0.02),
-    min_score INT NOT NULL DEFAULT 75 CHECK (min_score BETWEEN 70 AND 95),
+    min_score INT NOT NULL DEFAULT 70 CHECK (min_score BETWEEN 50 AND 95),
     min_rvol NUMERIC NOT NULL DEFAULT 1.2 CHECK (min_rvol BETWEEN 0.8 AND 2.5),
     enable_breakeven_partial BOOLEAN NOT NULL DEFAULT true,
     max_directional_exposure_pct NUMERIC NOT NULL DEFAULT 0.015,
