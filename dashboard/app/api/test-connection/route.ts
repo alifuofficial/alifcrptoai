@@ -47,6 +47,9 @@ async function testBinance(options?: BinanceTestOptions) {
   let secret = options?.secret?.trim();
   let sandbox = options?.sandbox;
 
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+  if (secret && (secret.includes("••••") || secret.includes("****"))) secret = undefined;
+
   if (!apiKey || !secret) {
     try {
       const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
@@ -246,6 +249,9 @@ async function testBybit(options?: BybitTestOptions) {
   let secret = options?.secret?.trim();
   let sandbox = options?.sandbox;
 
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+  if (secret && (secret.includes("••••") || secret.includes("****"))) secret = undefined;
+
   if (!apiKey || !secret) {
     try {
       const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
@@ -359,6 +365,8 @@ async function testDeepSeek(options?: DeepSeekTestOptions) {
   let apiKey = options?.apiKey?.trim();
   let model = options?.model?.trim();
 
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+
   if (!baseUrl || !apiKey || !model) {
     try {
       const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
@@ -374,6 +382,43 @@ async function testDeepSeek(options?: DeepSeekTestOptions) {
 
   baseUrl = baseUrl || "https://api.deepseek.com";
   model = model || "deepseek-chat";
+
+  // SSRF Protection: Prevent connecting to internal networks, localhost, or cloud metadata
+  const isSafeUrl = (urlStr: string): boolean => {
+    try {
+      const u = new URL(urlStr);
+      if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+      const h = u.hostname.toLowerCase();
+      if (
+        h === "localhost" ||
+        h === "127.0.0.1" ||
+        h === "0.0.0.0" ||
+        h === "169.254.169.254" ||
+        h.startsWith("10.") ||
+        h.startsWith("192.168.") ||
+        (h.startsWith("172.") && parseInt(h.split(".")[1], 10) >= 16 && parseInt(h.split(".")[1], 10) <= 31) ||
+        h.endsWith(".internal") ||
+        h.endsWith(".local")
+      ) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!isSafeUrl(baseUrl)) {
+    return {
+      success: false,
+      service: "deepseek",
+      message: "Security Error: Disallowed private host or IP address in AI Base URL.",
+      latencyMs: 0,
+      model,
+      baseUrl,
+      configured: false,
+    };
+  }
 
   if (!apiKey) {
     return {
@@ -464,6 +509,8 @@ async function testGemini(options?: GeminiTestOptions) {
   const start = Date.now();
   let apiKey = options?.apiKey?.trim();
   let model = options?.model?.trim() || "gemini-3.1-flash-lite";
+
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
 
   // Auto-upgrade deprecated / legacy model identifiers
   if (
@@ -577,6 +624,9 @@ async function testTelegram(options?: TelegramTestOptions) {
   let token = options?.token?.trim();
   let chatId = options?.chatId?.trim();
   const sendTestMessage = options?.sendTestMessage ?? true;
+
+  if (token && (token.includes("••••") || token.includes("****"))) token = undefined;
+  if (chatId && (chatId.includes("••••") || chatId.includes("****"))) chatId = undefined;
 
   if (!token || !chatId) {
     try {

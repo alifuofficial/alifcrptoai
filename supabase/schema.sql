@@ -420,14 +420,14 @@ BEGIN
     -- Ensure singleton row (id = 1) exists
     INSERT INTO bot_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
-    -- Disable RLS on tables so dashboard operator and bot can read/write without policy errors
-    ALTER TABLE bot_config DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE account_snapshots DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE ai_audit_logs DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE trade_executions DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE trade_autopsies DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE bot_lessons DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE market_news DISABLE ROW LEVEL SECURITY;
+    -- Enable Row Level Security (RLS) so only authenticated operators and service_role can access data
+    ALTER TABLE bot_config ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE account_snapshots ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE ai_audit_logs ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE trade_executions ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE trade_autopsies ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE bot_lessons ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE market_news ENABLE ROW LEVEL SECURITY;
 
     -- Update active_strategies column default to include all 6 strategies
     ALTER TABLE bot_config 

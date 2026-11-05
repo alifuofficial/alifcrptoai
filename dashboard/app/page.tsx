@@ -75,6 +75,8 @@ import {
   BookOpen,
   LineChart,
   Globe,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 
 import LiveTradeChart from "./components/LiveTradeChart";
@@ -290,6 +292,43 @@ export default function CommandCenterPage() {
   const [auditExchangeFilter, setAuditExchangeFilter] = useState<"ALL" | "binance" | "bybit">("ALL");
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Restore sidebar collapsed preference from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("alifcrptoai_sidebar_collapsed");
+      if (saved !== null) {
+        setSidebarCollapsed(saved === "true");
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("alifcrptoai_sidebar_collapsed", String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  // Keyboard shortcut Ctrl+\ or Ctrl+B to toggle sidebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "\\" || e.key.toLowerCase() === "b")) {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
   const [toastNotification, setToastNotification] = useState<{
     message: string;
     type: "success" | "error" | "info";
@@ -1247,6 +1286,20 @@ export default function CommandCenterPage() {
     };
   }, [chartJsData]);
 
+  if (!sessionChecked) {
+    return (
+      <div className="bg-background text-textMain h-screen flex flex-col items-center justify-center space-y-4">
+        <div className="w-10 h-10 bg-brand-900 rounded-lg flex items-center justify-center shadow-md animate-pulse">
+          <Activity className="text-white w-6 h-6" />
+        </div>
+        <div className="flex items-center gap-2 text-xs text-textMuted font-mono">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-600" />
+          <span>Verifying encrypted session...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-background text-textMain font-sans antialiased h-screen flex overflow-hidden selection:bg-brand-100 selection:text-brand-900">
       {/* Upgraded Toast Notification */}
@@ -1340,24 +1393,48 @@ export default function CommandCenterPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* SIDEBAR (Responsive Sliding Drawer on Mobile / Fixed on Desktop) */}
+      {/* SIDEBAR (Responsive Sliding Drawer on Mobile / Collapsible on Desktop) */}
       {/* ========================================================================= */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 bg-surface border-r border-border flex flex-col h-full shrink-0 shadow-2xl lg:shadow-none transition-transform duration-300 ease-in-out lg:static lg:w-64 lg:translate-x-0 ${
-          mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+        className={`fixed inset-y-0 left-0 z-50 bg-surface border-r border-border flex flex-col h-full shrink-0 shadow-2xl lg:shadow-none transition-all duration-300 ease-in-out lg:static ${
+          sidebarCollapsed ? "lg:w-20 w-72" : "lg:w-64 w-72"
+        } ${
+          mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         }`}
       >
-        {/* Logo Area */}
-        <div className="h-16 flex items-center justify-between px-6 border-b border-border">
-          <div className="flex items-center">
-            <div className="w-8 h-8 bg-brand-900 rounded flex items-center justify-center mr-3">
+        {/* Logo & Collapse Header */}
+        <div className={`h-16 flex items-center border-b border-border transition-all duration-200 ${
+          sidebarCollapsed ? "justify-center px-2" : "justify-between px-4 sm:px-5"
+        }`}>
+          <div className="flex items-center overflow-hidden">
+            <div className="w-8 h-8 bg-brand-900 rounded flex items-center justify-center shrink-0 shadow-2xs">
               <Activity className="text-white w-5 h-5" />
             </div>
-            <div>
-              <h1 className="font-bold text-sm tracking-wide leading-tight">alifcrptoai</h1>
-              <span className="text-[10px] text-textMuted font-medium uppercase tracking-wider">By Alifu Haji</span>
-            </div>
+            {!sidebarCollapsed && (
+              <div className="ml-3 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+                <h1 className="font-bold text-sm tracking-wide leading-tight">alifcrptoai</h1>
+                <span className="text-[10px] text-textMuted font-medium uppercase tracking-wider">By Alifu Haji</span>
+              </div>
+            )}
           </div>
+
+          {/* Desktop Toggle Button */}
+          <button
+            onClick={toggleSidebar}
+            className={`hidden lg:flex p-1.5 text-textMuted hover:text-textMain hover:bg-slate-100 rounded-md transition-colors cursor-pointer ${
+              sidebarCollapsed ? "mt-0" : ""
+            }`}
+            title={sidebarCollapsed ? "Expand Sidebar (Ctrl+\\)" : "Collapse Sidebar (Ctrl+\\)"}
+            aria-label="Toggle Sidebar"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4 text-slate-600" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4 text-slate-600" />
+            )}
+          </button>
+
+          {/* Mobile Close Button */}
           <button
             onClick={() => setMobileMenuOpen(false)}
             className="p-1.5 text-textMuted hover:text-textMain rounded-lg lg:hidden hover:bg-slate-100 transition-colors cursor-pointer"
@@ -1368,24 +1445,32 @@ export default function CommandCenterPage() {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
           {/* Section 1: Trading Desk */}
           <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
+            {!sidebarCollapsed ? (
+              <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Trading Desk</p>
+            ) : (
+              <div className="my-1.5 border-t border-border/40 mx-2" />
+            )}
+
             {/* 1. Overview & KPIs (Default Home Dashboard) */}
             <button
               onClick={() => {
                 setActiveSection("overview");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+              title="Overview & KPIs"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                sidebarCollapsed ? "justify-center p-2.5" : "px-3 py-2"
+              } ${
                 activeSection === "overview"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <LayoutDashboard className="w-4 h-4 mr-3 text-slate-700" />
-              <span>Overview &amp; KPIs</span>
+              <LayoutDashboard className={`w-4 h-4 text-slate-700 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+              {!sidebarCollapsed && <span>Overview &amp; KPIs</span>}
             </button>
 
             {/* 2. Live Execution Chart */}
@@ -1394,20 +1479,27 @@ export default function CommandCenterPage() {
                 setActiveSection("chart");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              title="Live Execution Chart"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 relative ${
+                sidebarCollapsed ? "justify-center p-2.5" : "justify-between px-3 py-2"
+              } ${
                 activeSection === "chart"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <LineChart className="w-4 h-4 mr-3 text-cyan-600" />
-                <span>Live Execution Chart</span>
+                <LineChart className={`w-4 h-4 text-cyan-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+                {!sidebarCollapsed && <span>Live Execution Chart</span>}
               </div>
               {openTrades.length > 0 && (
-                <span className="bg-cyan-100 text-cyan-800 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
-                  {openTrades.length} Active
-                </span>
+                sidebarCollapsed ? (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-cyan-500 rounded-full animate-pulse" />
+                ) : (
+                  <span className="bg-cyan-100 text-cyan-800 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                    {openTrades.length} Active
+                  </span>
+                )
               )}
             </button>
 
@@ -1417,20 +1509,27 @@ export default function CommandCenterPage() {
                 setActiveSection("positions");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              title="Live Positions"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 relative ${
+                sidebarCollapsed ? "justify-center p-2.5" : "justify-between px-3 py-2"
+              } ${
                 activeSection === "positions"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <Layers className="w-4 h-4 mr-3 text-brand-500" />
-                <span>Live Positions</span>
+                <Layers className={`w-4 h-4 text-brand-500 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+                {!sidebarCollapsed && <span>Live Positions</span>}
               </div>
               {openTrades.length > 0 && (
-                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
-                  {openTrades.length}
-                </span>
+                sidebarCollapsed ? (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-brand-500 rounded-full" />
+                ) : (
+                  <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                    {openTrades.length}
+                  </span>
+                )
               )}
             </button>
 
@@ -1440,14 +1539,17 @@ export default function CommandCenterPage() {
                 setActiveSection("journal");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              title="Trading Journal"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                sidebarCollapsed ? "justify-center p-2.5" : "px-3 py-2"
+              } ${
                 activeSection === "journal"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <BookOpen className="w-4 h-4 mr-3 text-purple-600" />
-              <span>Trading Journal</span>
+              <BookOpen className={`w-4 h-4 text-purple-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+              {!sidebarCollapsed && <span>Trading Journal</span>}
             </button>
 
             {/* 5. Strategy Analytics */}
@@ -1456,60 +1558,83 @@ export default function CommandCenterPage() {
                 setActiveSection("strategies");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              title="Strategy Analytics"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                sidebarCollapsed ? "justify-center p-2.5" : "px-3 py-2"
+              } ${
                 activeSection === "strategies"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <TrendingUp className="w-4 h-4 mr-3 text-brand-600" />
-              <span>Strategy Analytics</span>
+              <TrendingUp className={`w-4 h-4 text-brand-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+              {!sidebarCollapsed && <span>Strategy Analytics</span>}
             </button>
           </div>
 
           {/* Section 2: Market Intelligence */}
           <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
+            {!sidebarCollapsed ? (
+              <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Market Intelligence</p>
+            ) : (
+              <div className="my-2 border-t border-border/40 mx-2" />
+            )}
             <button
               onClick={() => {
                 setActiveSection("news");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+              title="Market & Macro News"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer relative ${
+                sidebarCollapsed ? "justify-center p-2.5" : "justify-between px-3 py-2"
+              } ${
                 activeSection === "news"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <Newspaper className="w-4 h-4 mr-3 text-indigo-600" />
-                <span>Market &amp; Macro News</span>
+                <Newspaper className={`w-4 h-4 text-indigo-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+                {!sidebarCollapsed && <span>Market &amp; Macro News</span>}
               </div>
-              <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
-                {newsItems.length}
-              </span>
+              {newsItems.length > 0 && (
+                sidebarCollapsed ? (
+                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-indigo-500 rounded-full" />
+                ) : (
+                  <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-sm">
+                    {newsItems.length}
+                  </span>
+                )
+              )}
             </button>
           </div>
 
           {/* Section 3: AI Intelligence */}
           <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
+            {!sidebarCollapsed ? (
+              <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">AI Intelligence</p>
+            ) : (
+              <div className="my-2 border-t border-border/40 mx-2" />
+            )}
             <button
               onClick={() => {
                 setActiveSection("audits");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+              title="AI Risk Audits"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer relative ${
+                sidebarCollapsed ? "justify-center p-2.5" : "justify-between px-3 py-2"
+              } ${
                 activeSection === "audits"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <Cpu className="w-4 h-4 mr-3 text-blue-600" />
-                <span>DeepSeek Audits</span>
+                <Cpu className={`w-4 h-4 text-blue-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+                {!sidebarCollapsed && <span>DeepSeek Audits</span>}
               </div>
-              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0" />
             </button>
 
             <button
@@ -1517,67 +1642,83 @@ export default function CommandCenterPage() {
                 setActiveSection("autopsies");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+              title="Self-Learning Engine"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 relative ${
+                sidebarCollapsed ? "justify-center p-2.5" : "justify-between px-3 py-2"
+              } ${
                 activeSection === "autopsies"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
               <div className="flex items-center">
-                <BrainCircuit className="w-4 h-4 mr-3 text-emerald-600" />
-                <span>Self-Learning</span>
+                <BrainCircuit className={`w-4 h-4 text-emerald-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+                {!sidebarCollapsed && <span>Self-Learning</span>}
               </div>
               {lessons.filter((l) => l.status === "PENDING").length > 0 && (
-                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
-                  {lessons.filter((l) => l.status === "PENDING").length}
-                </span>
+                sidebarCollapsed ? (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-amber-500 rounded-full" />
+                ) : (
+                  <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-1.5 py-0.5 rounded-sm">
+                    {lessons.filter((l) => l.status === "PENDING").length}
+                  </span>
+                )
               )}
             </button>
           </div>
 
           {/* Section 4: Management */}
           <div>
-            <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
+            {!sidebarCollapsed ? (
+              <p className="px-3 text-[10px] font-bold text-textMuted uppercase tracking-wider mb-2">Management</p>
+            ) : (
+              <div className="my-2 border-t border-border/40 mx-2" />
+            )}
             <button
               onClick={() => {
                 setActiveSection("settings");
                 setMobileMenuOpen(false);
               }}
-              className={`flex w-full items-center px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer ${
+              title="Risk & Settings"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer ${
+                sidebarCollapsed ? "justify-center p-2.5" : "px-3 py-2"
+              } ${
                 activeSection === "settings"
-                  ? "bg-brand-50 text-brand-600 font-semibold"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
                   : "text-textMuted hover:text-textMain hover:bg-slate-50"
               }`}
             >
-              <SlidersHorizontal className="w-4 h-4 mr-3 text-slate-700" />
-              <span>Risk &amp; Settings</span>
+              <SlidersHorizontal className={`w-4 h-4 text-slate-700 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+              {!sidebarCollapsed && <span>Risk &amp; Settings</span>}
             </button>
           </div>
         </nav>
 
         {/* User Profile */}
-        <div className="p-4 border-t border-border">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">
+        <div className="p-3 border-t border-border">
+          <div className={`flex items-center ${sidebarCollapsed ? "flex-col gap-2 justify-center" : "justify-between"}`}>
+            <div className="flex items-center overflow-hidden" title="Alifu Haji • Operator">
+              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-700 shrink-0 shadow-2xs">
                 AH
               </div>
-              <div className="ml-3">
-                <p className="text-sm font-semibold leading-tight">Alifu Haji</p>
-                <p className="text-[10px] text-emerald-600 font-medium flex items-center mt-0.5">
-                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5"></span> Realtime Active
-                </p>
-              </div>
+              {!sidebarCollapsed && (
+                <div className="ml-3 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+                  <p className="text-sm font-semibold leading-tight">Alifu Haji</p>
+                  <p className="text-[10px] text-emerald-600 font-medium flex items-center mt-0.5">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5"></span> Realtime Active
+                  </p>
+                </div>
+              )}
             </div>
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
                 supabase.auth.signOut().then(() => router.push("/login"));
               }}
-              className="text-textMuted hover:text-textMain p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+              className="text-textMuted hover:text-textMain p-1.5 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
               title="Sign Out"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="w-4 h-4 text-slate-500 hover:text-rose-600" />
             </button>
           </div>
         </div>
@@ -1598,6 +1739,17 @@ export default function CommandCenterPage() {
             >
               <Menu className="w-5 h-5 text-slate-700" />
             </button>
+
+            {/* Desktop Expand Button when Sidebar is Collapsed */}
+            {sidebarCollapsed && (
+              <button
+                onClick={toggleSidebar}
+                className="hidden lg:flex p-1.5 -ml-2 mr-2 text-textMuted hover:text-textMain hover:bg-slate-100 rounded-md transition-colors cursor-pointer shrink-0"
+                title="Expand Sidebar (Ctrl+\)"
+              >
+                <PanelLeftOpen className="w-4 h-4 text-slate-700" />
+              </button>
+            )}
 
             <span className="hidden sm:inline">DESK</span>
             <ChevronRight className="w-3 h-3 hidden sm:inline" />

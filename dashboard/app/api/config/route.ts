@@ -24,6 +24,27 @@ export async function GET() {
       );
     }
 
+    const maskKey = (val?: string | null) => {
+      if (!val) return null;
+      if (val.length <= 8) return "••••••••";
+      return `${val.slice(0, 4)}••••${val.slice(-4)}`;
+    };
+    const maskSecret = (val?: string | null) => {
+      if (!val) return null;
+      return "••••••••••••••••";
+    };
+
+    const sanitizeConfig = (cfg: any) => ({
+      ...cfg,
+      binance_api_key_override: maskKey(cfg.binance_api_key_override),
+      binance_secret_override: maskSecret(cfg.binance_secret_override),
+      bybit_api_key_override: maskKey(cfg.bybit_api_key_override),
+      bybit_secret_override: maskSecret(cfg.bybit_secret_override),
+      deepseek_key_override: maskKey(cfg.deepseek_key_override),
+      gemini_api_key_override: maskKey(cfg.gemini_api_key_override),
+      telegram_token_override: maskKey(cfg.telegram_token_override),
+    });
+
     if (existing) {
       if (
         !existing.gemini_model ||
@@ -36,7 +57,7 @@ export async function GET() {
       }
       return NextResponse.json({
         success: true,
-        data: existing,
+        data: sanitizeConfig(existing),
         seeded: false,
       });
     }
@@ -134,6 +155,22 @@ export async function POST(req: Request) {
       updated_at: new Date().toISOString(),
     };
 
+    // Prevent masked secret strings from overwriting real secrets in the database
+    const secretKeys = [
+      "binance_api_key_override",
+      "binance_secret_override",
+      "bybit_api_key_override",
+      "bybit_secret_override",
+      "deepseek_key_override",
+      "gemini_api_key_override",
+      "telegram_token_override",
+    ];
+    for (const key of secretKeys) {
+      if (typeof payload[key] === "string" && (payload[key].includes("••••") || payload[key].includes("****"))) {
+        delete payload[key];
+      }
+    }
+
     // Use UPSERT so it will insert row 1 if missing, or update if existing!
     const { data: saved, error } = await supabase
       .from("bot_config")
@@ -154,10 +191,31 @@ export async function POST(req: Request) {
       );
     }
 
+    const maskKey = (val?: string | null) => {
+      if (!val) return null;
+      if (val.length <= 8) return "••••••••";
+      return `${val.slice(0, 4)}••••${val.slice(-4)}`;
+    };
+    const maskSecret = (val?: string | null) => {
+      if (!val) return null;
+      return "••••••••••••••••";
+    };
+
+    const sanitizedSaved = {
+      ...saved,
+      binance_api_key_override: maskKey(saved.binance_api_key_override),
+      binance_secret_override: maskSecret(saved.binance_secret_override),
+      bybit_api_key_override: maskKey(saved.bybit_api_key_override),
+      bybit_secret_override: maskSecret(saved.bybit_secret_override),
+      deepseek_key_override: maskKey(saved.deepseek_key_override),
+      gemini_api_key_override: maskKey(saved.gemini_api_key_override),
+      telegram_token_override: maskKey(saved.telegram_token_override),
+    };
+
     return NextResponse.json({
       success: true,
       message: "Configuration successfully committed and persisted to PostgreSQL database!",
-      data: saved,
+      data: sanitizedSaved,
     });
   } catch (err: any) {
     return NextResponse.json(
