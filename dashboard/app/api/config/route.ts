@@ -25,6 +25,12 @@ export async function GET() {
     }
 
     if (existing) {
+      if (
+        !existing.gemini_model ||
+        ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"].includes(existing.gemini_model)
+      ) {
+        existing.gemini_model = "gemini-3.1-flash-lite";
+      }
       return NextResponse.json({
         success: true,
         data: existing,
@@ -63,7 +69,7 @@ export async function GET() {
       deepseek_base_url: "https://api.deepseek.com",
       ai_provider: "deepseek",
       gemini_api_key_override: null,
-      gemini_model: "gemini-2.5-flash",
+      gemini_model: "gemini-3.1-flash-lite",
       exchange_mode: "binance",
       bybit_api_key_override: null,
       bybit_secret_override: null,

@@ -413,7 +413,7 @@ BEGIN
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'deepseek';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_api_key_override TEXT DEFAULT NULL;
-    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite';
     ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
     ALTER TABLE trade_autopsies ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
 

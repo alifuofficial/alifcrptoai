@@ -291,7 +291,10 @@ def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
     """
     if provider == "gemini":
         gemini_key = cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY", "")
-        gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+        # Auto-upgrade deprecated / retired model identifiers
+        if gemini_model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+            gemini_model = "gemini-3.1-flash-lite"
         client = OpenAI(
             api_key=gemini_key or "dummy-gemini-key",
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -334,16 +337,31 @@ def execute_ai_completion(
 
     if provider == "gemini":
         client, model = get_ai_client("gemini", cfg)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,
-            max_tokens=max_tokens
-        )
-        return (resp.choices[0].message.content or "{}"), model
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=max_tokens
+            )
+            return (resp.choices[0].message.content or "{}"), model
+        except Exception as e:
+            if ("404" in str(e) or "not found" in str(e).lower() or "no longer available" in str(e).lower()) and model != "gemini-3.1-flash-lite":
+                print(f"[ai_router] Gemini model '{model}' unavailable ({e}). Retrying with 'gemini-3.1-flash-lite'...")
+                resp = client.chat.completions.create(
+                    model="gemini-3.1-flash-lite",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=max_tokens
+                )
+                return (resp.choices[0].message.content or "{}"), "gemini-3.1-flash-lite"
+            raise e
 
     elif provider == "auto":
         # Hybrid Auto-Fallback Mode: DeepSeek primary -> Gemini backup
@@ -362,16 +380,31 @@ def execute_ai_completion(
         except Exception as ds_err:
             print(f"[ai_router] DeepSeek error ({ds_err}). Auto-falling back to Google Gemini free tier...")
             gemini_client, gemini_model = get_ai_client("gemini", cfg)
-            resp = gemini_client.chat.completions.create(
-                model=gemini_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1,
-                max_tokens=max_tokens
-            )
-            return (resp.choices[0].message.content or "{}"), gemini_model
+            try:
+                resp = gemini_client.chat.completions.create(
+                    model=gemini_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=max_tokens
+                )
+                return (resp.choices[0].message.content or "{}"), gemini_model
+            except Exception as gem_err:
+                if ("404" in str(gem_err) or "not found" in str(gem_err).lower() or "no longer available" in str(gem_err).lower()) and gemini_model != "gemini-3.1-flash-lite":
+                    print(f"[ai_router] Gemini fallback model '{gemini_model}' retired. Retrying with 'gemini-3.1-flash-lite'...")
+                    resp = gemini_client.chat.completions.create(
+                        model="gemini-3.1-flash-lite",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1,
+                        max_tokens=max_tokens
+                    )
+                    return (resp.choices[0].message.content or "{}"), "gemini-3.1-flash-lite"
+                raise gem_err
 
     else:
         # Default: deepseek
@@ -430,7 +463,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "deepseek_base_url": "https://api.deepseek.com",
         "ai_provider": "deepseek",
         "gemini_api_key_override": None,
-        "gemini_model": "gemini-2.5-flash",
+        "gemini_model": "gemini-3.1-flash-lite",
         "exchange_mode": "binance",
         "bybit_api_key_override": None,
         "bybit_secret_override": None,

@@ -463,14 +463,27 @@ async function testDeepSeek(options?: DeepSeekTestOptions) {
 async function testGemini(options?: GeminiTestOptions) {
   const start = Date.now();
   let apiKey = options?.apiKey?.trim();
-  let model = options?.model?.trim() || "gemini-2.5-flash";
+  let model = options?.model?.trim() || "gemini-3.1-flash-lite";
+
+  // Auto-upgrade deprecated / legacy model identifiers
+  if (
+    !model ||
+    model === "gemini-2.5-flash" ||
+    model === "gemini-1.5-flash" ||
+    model === "gemini-2.0-flash" ||
+    model === "gemini-2.5-flash-lite"
+  ) {
+    model = "gemini-3.1-flash-lite";
+  }
 
   if (!apiKey) {
     try {
       const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
       if (cfg) {
         apiKey = cfg.gemini_api_key_override || process.env.GEMINI_API_KEY;
-        if (cfg.gemini_model) model = cfg.gemini_model;
+        if (cfg.gemini_model && !["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"].includes(cfg.gemini_model)) {
+          model = cfg.gemini_model;
+        }
       }
     } catch {
       // Fallback
@@ -490,15 +503,15 @@ async function testGemini(options?: GeminiTestOptions) {
 
   const endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-  try {
-    const aiRes = await fetch(endpoint, {
+  const runGeminiPing = async (targetModel: string) => {
+    return fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: targetModel,
         messages: [
           { role: "system", content: "You are a quantitative trading auditor ping test." },
           { role: "user", content: "Reply with the single word: READY" },
@@ -508,9 +521,20 @@ async function testGemini(options?: GeminiTestOptions) {
       }),
       signal: AbortSignal.timeout(12000),
     });
+  };
 
-    const latencyMs = Date.now() - start;
-    const aiData = await aiRes.json();
+  try {
+    let aiRes = await runGeminiPing(model);
+    let latencyMs = Date.now() - start;
+    let aiData = await aiRes.json();
+
+    // If 404 (model retired/deprecated for new API keys), auto-retry with gemini-3.1-flash-lite
+    if (!aiRes.ok && aiRes.status === 404 && model !== "gemini-3.1-flash-lite") {
+      model = "gemini-3.1-flash-lite";
+      aiRes = await runGeminiPing(model);
+      latencyMs = Date.now() - start;
+      aiData = await aiRes.json();
+    }
 
     if (!aiRes.ok) {
       const errMsg = aiData?.error?.message || aiData?.message || `HTTP ${aiRes.status}`;
