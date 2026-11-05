@@ -30,6 +30,11 @@ interface DeepSeekTestOptions {
   model?: string;
 }
 
+interface GeminiTestOptions {
+  apiKey?: string;
+  model?: string;
+}
+
 interface TelegramTestOptions {
   token?: string;
   chatId?: string;
@@ -455,6 +460,94 @@ async function testDeepSeek(options?: DeepSeekTestOptions) {
   }
 }
 
+async function testGemini(options?: GeminiTestOptions) {
+  const start = Date.now();
+  let apiKey = options?.apiKey?.trim();
+  let model = options?.model?.trim() || "gemini-2.5-flash";
+
+  if (!apiKey) {
+    try {
+      const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfg) {
+        apiKey = cfg.gemini_api_key_override || process.env.GEMINI_API_KEY;
+        if (cfg.gemini_model) model = cfg.gemini_model;
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  if (!apiKey) {
+    return {
+      success: false,
+      service: "gemini",
+      message: "No Gemini API Key provided. Please enter your Google AI Studio API key.",
+      configured: false,
+      latencyMs: 0,
+      model,
+    };
+  }
+
+  const endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
+  try {
+    const aiRes = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a quantitative trading auditor ping test." },
+          { role: "user", content: "Reply with the single word: READY" },
+        ],
+        max_tokens: 15,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const latencyMs = Date.now() - start;
+    const aiData = await aiRes.json();
+
+    if (!aiRes.ok) {
+      const errMsg = aiData?.error?.message || aiData?.message || `HTTP ${aiRes.status}`;
+      return {
+        success: false,
+        service: "gemini",
+        message: `Gemini API Error (${aiRes.status}): ${errMsg}`,
+        latencyMs,
+        model,
+        configured: true,
+      };
+    }
+
+    const reply = aiData.choices?.[0]?.message?.content?.trim() || "READY";
+
+    return {
+      success: true,
+      service: "gemini",
+      message: `Gemini Free Tier Connected! Model '${model}' responded "${reply}" (${latencyMs}ms)`,
+      latencyMs,
+      model,
+      configured: true,
+      reply,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    return {
+      success: false,
+      service: "gemini",
+      message: `Gemini Connection Failed: ${err.message}`,
+      latencyMs,
+      model,
+      configured: true,
+    };
+  }
+}
+
 async function testTelegram(options?: TelegramTestOptions) {
   const start = Date.now();
   let token = options?.token?.trim();
@@ -613,6 +706,11 @@ export async function POST(req: Request) {
       return NextResponse.json(result);
     }
 
+    if (service === "gemini") {
+      const result = await testGemini(params.gemini);
+      return NextResponse.json(result);
+    }
+
     if (service === "telegram") {
       const result = await testTelegram(params.telegram);
       return NextResponse.json(result);
@@ -624,15 +722,16 @@ export async function POST(req: Request) {
     }
 
     // Default: Test all services
-    const [binanceRes, bybitRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
+    const [binanceRes, bybitRes, deepseekRes, geminiRes, telegramRes, dbRes] = await Promise.all([
       testBinance(params.binance),
       testBybit(params.bybit),
       testDeepSeek(params.deepseek),
+      testGemini(params.gemini),
       testTelegram(params.telegram),
       testDatabase(),
     ]);
 
-    const allSuccessful = binanceRes.success && deepseekRes.success && telegramRes.success && dbRes.success;
+    const allSuccessful = binanceRes.success && (deepseekRes.success || geminiRes.success) && telegramRes.success && dbRes.success;
 
     return NextResponse.json({
       success: allSuccessful,
@@ -641,6 +740,7 @@ export async function POST(req: Request) {
         binance: binanceRes,
         bybit: bybitRes,
         deepseek: deepseekRes,
+        gemini: geminiRes,
         telegram: telegramRes,
         database: dbRes,
       },
@@ -657,21 +757,23 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const [binanceRes, bybitRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
+  const [binanceRes, bybitRes, deepseekRes, geminiRes, telegramRes, dbRes] = await Promise.all([
     testBinance(),
     testBybit(),
     testDeepSeek(),
+    testGemini(),
     testTelegram(),
     testDatabase(),
   ]);
 
   return NextResponse.json({
-    success: binanceRes.success && deepseekRes.success && telegramRes.success && dbRes.success,
+    success: binanceRes.success && (deepseekRes.success || geminiRes.success) && telegramRes.success && dbRes.success,
     service: "all",
     results: {
       binance: binanceRes,
       bybit: bybitRes,
       deepseek: deepseekRes,
+      gemini: geminiRes,
       telegram: telegramRes,
       database: dbRes,
     },

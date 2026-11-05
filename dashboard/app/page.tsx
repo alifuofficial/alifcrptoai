@@ -114,6 +114,9 @@ interface BotConfig {
   forex_rollover_shield?: boolean;
   forex_max_spread_pips?: number;
   panic_close_target?: "ALL" | "CRYPTO" | "FOREX";
+  ai_provider?: "deepseek" | "gemini" | "auto";
+  gemini_api_key_override?: string | null;
+  gemini_model?: string;
   deepseek_key_override?: string | null;
   telegram_token_override?: string | null;
   telegram_chat_id_override?: string | null;
@@ -183,6 +186,7 @@ interface AiAuditLog {
   forex_session?: string | null;
   spread_pips?: number | null;
   spread_at_entry?: number | null;
+  ai_model?: string | null;
   strategy_name: string;
   proposed_direction: string;
   total_score: number;
@@ -372,12 +376,14 @@ export default function CommandCenterPage() {
     binance: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     bybit: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     deepseek: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    gemini: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     telegram: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     database: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
   }>({
     binance: { status: "idle" },
     bybit: { status: "idle" },
     deepseek: { status: "idle" },
+    gemini: { status: "idle" },
     telegram: { status: "idle" },
     database: { status: "idle" },
   });
@@ -723,7 +729,7 @@ export default function CommandCenterPage() {
     setTimeout(() => setToastNotification(null), 4500);
   };
 
-  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "telegram" | "database") => {
+  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "gemini" | "telegram" | "database") => {
     setApiHealth((prev) => ({
       ...prev,
       [service]: { status: "testing", message: "Connecting & verifying endpoint..." },
@@ -750,6 +756,10 @@ export default function CommandCenterPage() {
               baseUrl: formSettings.deepseek_base_url,
               apiKey: formSettings.deepseek_key_override,
               model: formSettings.deepseek_model,
+            },
+            gemini: {
+              apiKey: formSettings.gemini_api_key_override,
+              model: formSettings.gemini_model || "gemini-2.5-flash",
             },
             telegram: {
               token: formSettings.telegram_token_override,
@@ -789,6 +799,7 @@ export default function CommandCenterPage() {
       binance: { status: "testing", message: "Testing Binance gateway..." },
       bybit: { status: "testing", message: "Testing Bybit V5 gateway..." },
       deepseek: { status: "testing", message: "Testing AI model..." },
+      gemini: { status: "testing", message: "Testing Google Gemini..." },
       telegram: { status: "testing", message: "Testing alerts..." },
       database: { status: "testing", message: "Testing ledger..." },
     });
@@ -815,6 +826,10 @@ export default function CommandCenterPage() {
               apiKey: formSettings.deepseek_key_override,
               model: formSettings.deepseek_model,
             },
+            gemini: {
+              apiKey: formSettings.gemini_api_key_override,
+              model: formSettings.gemini_model || "gemini-2.5-flash",
+            },
             telegram: {
               token: formSettings.telegram_token_override,
               chatId: formSettings.telegram_chat_id_override,
@@ -829,6 +844,7 @@ export default function CommandCenterPage() {
         const b = data.results.binance;
         const by = data.results.bybit;
         const d = data.results.deepseek;
+        const g = data.results.gemini;
         const t = data.results.telegram;
         const db = data.results.database;
 
@@ -836,6 +852,7 @@ export default function CommandCenterPage() {
           binance: { status: b?.success ? "success" : "error", message: b?.message, latency: b?.latencyMs },
           bybit: { status: by?.success ? "success" : "error", message: by?.message, latency: by?.latencyMs },
           deepseek: { status: d?.success ? "success" : "error", message: d?.message, latency: d?.latencyMs },
+          gemini: { status: g?.success ? "success" : "error", message: g?.message, latency: g?.latencyMs },
           telegram: { status: t?.success ? "success" : "error", message: t?.message, latency: t?.latencyMs },
           database: { status: db?.success ? "success" : "error", message: db?.message, latency: db?.latencyMs },
         });
@@ -942,6 +959,9 @@ export default function CommandCenterPage() {
         forex_weekend_shield: Boolean(formSettings.forex_weekend_shield ?? true),
         forex_rollover_shield: Boolean(formSettings.forex_rollover_shield ?? true),
         forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.0),
+        ai_provider: formSettings.ai_provider || "deepseek",
+        gemini_api_key_override: formSettings.gemini_api_key_override?.trim() || null,
+        gemini_model: formSettings.gemini_model || "gemini-2.5-flash",
         deepseek_key_override: formSettings.deepseek_key_override?.trim() || null,
         telegram_token_override: formSettings.telegram_token_override?.trim() || null,
         telegram_chat_id_override: formSettings.telegram_chat_id_override?.trim() || null,
@@ -1618,6 +1638,18 @@ export default function CommandCenterPage() {
             }`}>
               <Layers className="w-3.5 h-3.5 mr-1.5 shrink-0" />
               <span>{config?.exchange_mode === "dual" ? "DUAL (CRYPTO + FX)" : config?.exchange_mode === "bybit" ? "BYBIT (FOREX)" : "BINANCE (CRYPTO)"}</span>
+            </div>
+
+            {/* AI Provider Indicator */}
+            <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
+              config?.ai_provider === "gemini"
+                ? "bg-blue-50 border-blue-200 text-blue-700"
+                : config?.ai_provider === "auto"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                : "bg-indigo-50 border-indigo-200 text-indigo-700"
+            }`}>
+              <Cpu className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+              <span>{config?.ai_provider === "gemini" ? "GEMINI (FREE)" : config?.ai_provider === "auto" ? "HYBRID (DS+GEMINI)" : "DEEPSEEK"}</span>
             </div>
 
             <button
@@ -2765,6 +2797,15 @@ export default function CommandCenterPage() {
                                 Spread: {Number(audit.spread_at_entry).toFixed(1)} pips
                               </span>
                             )}
+                            {audit.ai_model && (
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                                audit.ai_model.includes("gemini")
+                                  ? "bg-blue-50 text-blue-700 border-blue-200"
+                                  : "bg-indigo-50 text-indigo-700 border-indigo-200"
+                              }`}>
+                                {audit.ai_model}
+                              </span>
+                            )}
                             <span className="text-xs text-brand-600 font-mono">({audit.strategy_name})</span>
                           </div>
 
@@ -3880,39 +3921,103 @@ export default function CommandCenterPage() {
                 </div>
               </div>
 
-              {/* Dynamic AI Base URL & Routing */}
-              <div className="bg-surface border border-border rounded-lg p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
-                      <Cpu className="h-4 w-4" />
-                      <span>Dynamic AI Endpoint &amp; Base URL Routing</span>
-                    </h3>
-                    <p className="text-xs text-textMuted mt-1">
-                      Route Chief Quantitative Risk Officer audits through Official DeepSeek, OpenRouter, or BeatAPI proxies.
-                    </p>
+              {/* Dynamic AI Risk Officer & Multi-Model Routing Engine */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                <div>
+                  <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
+                    <Cpu className="h-4 w-4" />
+                    <span>AI Risk Officer Model &amp; Routing Engine</span>
+                  </h3>
+                  <p className="text-xs text-textMuted mt-1">
+                    Toggle your Chief Quantitative Risk Officer between DeepSeek, Google Gemini (Free Tier), or Auto-Fallback mode.
+                  </p>
+                </div>
+
+                {/* 3-Way AI Provider Selector */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-textMain">
+                    Active AI Model Provider
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {[
+                      {
+                        id: "deepseek",
+                        title: "DeepSeek V3 / R1",
+                        desc: "Standard institutional reasoning via api.deepseek.com",
+                        badge: "Direct API",
+                        color: "border-indigo-500 bg-indigo-50/50 text-indigo-900"
+                      },
+                      {
+                        id: "gemini",
+                        title: "Google Gemini",
+                        desc: "Ultra-fast auditing with 1,500 daily requests free on Google AI Studio",
+                        badge: "Free Tier",
+                        color: "border-blue-500 bg-blue-50/50 text-blue-900"
+                      },
+                      {
+                        id: "auto",
+                        title: "Auto-Fallback (Hybrid)",
+                        desc: "DeepSeek primary -> Automatic instant Gemini backup on 402 or balance outage",
+                        badge: "Recommended Shield",
+                        color: "border-emerald-500 bg-emerald-50/50 text-emerald-900"
+                      }
+                    ].map((opt) => {
+                      const isSel = (formSettings.ai_provider || "deepseek") === opt.id;
+                      return (
+                        <div
+                          key={opt.id}
+                          onClick={() => setFormSettings({ ...formSettings, ai_provider: opt.id as any })}
+                          className={`p-3.5 rounded-lg border-2 cursor-pointer transition-all ${
+                            isSel
+                              ? opt.color + " shadow-xs"
+                              : "border-border bg-slate-50/50 hover:bg-slate-100/60 text-textMain"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-bold">{opt.title}</span>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              isSel ? "bg-white/90 text-textMain border border-border/50" : "bg-slate-200/80 text-textMuted"
+                            }`}>
+                              {opt.badge}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-textMuted leading-tight">{opt.desc}</p>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-textMain mb-1">
-                      DeepSeek / OpenAI Base URL
-                    </label>
-                    <input
-                      type="text"
-                      value={formSettings.deepseek_base_url || "https://api.deepseek.com"}
-                      onChange={(e) => setFormSettings({ ...formSettings, deepseek_base_url: e.target.value })}
-                      placeholder="https://api.deepseek.com"
-                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
-                    />
-                  </div>
+                {/* DeepSeek Sub-Settings (Shown if 'deepseek' or 'auto') */}
+                {((formSettings.ai_provider || "deepseek") === "deepseek" || formSettings.ai_provider === "auto") && (
+                  <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                        DeepSeek Endpoint Configuration
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("deepseek")}
+                        disabled={apiHealth.deepseek.status === "testing"}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.deepseek.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-indigo-600" />}
+                        <span>Test DeepSeek</span>
+                      </button>
+                    </div>
 
-                  {/* Quick Presets */}
-                  <div>
-                    <span className="text-[10px] font-bold text-textMuted uppercase tracking-wider block mb-1.5">
-                      Quick-Select Presets:
-                    </span>
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">DeepSeek / OpenAI Base URL</label>
+                      <input
+                        type="text"
+                        value={formSettings.deepseek_base_url || "https://api.deepseek.com"}
+                        onChange={(e) => setFormSettings({ ...formSettings, deepseek_base_url: e.target.value })}
+                        placeholder="https://api.deepseek.com"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+
                     <div className="flex flex-wrap items-center gap-2">
                       {[
                         { name: "Official DeepSeek", url: "https://api.deepseek.com", defaultModel: "deepseek-chat" },
@@ -3931,54 +4036,94 @@ export default function CommandCenterPage() {
                                 deepseek_model: formSettings.deepseek_model || preset.defaultModel,
                               })
                             }
-                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border transition-all cursor-pointer ${
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
                               isSelected
-                                ? "bg-brand-50 border-brand-500 text-brand-700 font-semibold shadow-xs"
-                                : "bg-surface border-border text-textMuted hover:text-textMain hover:bg-slate-50"
+                                ? "bg-indigo-50 border-indigo-400 text-indigo-700 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
                             }`}
                           >
                             <span>{preset.name}</span>
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-mono">
-                              {preset.url.replace("https://", "")}
-                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">DeepSeek Model Identifier</label>
+                      <input
+                        type="text"
+                        value={formSettings.deepseek_model || "deepseek-chat"}
+                        onChange={(e) => setFormSettings({ ...formSettings, deepseek_model: e.target.value })}
+                        placeholder="deepseek-chat"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                      <span className="text-[10px] text-textMuted mt-1 block">
+                        Standard: <code>deepseek-chat</code>. Reasoning model: <code>deepseek-reasoner</code>.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Google Gemini Sub-Settings (Shown if 'gemini' or 'auto') */}
+                {((formSettings.ai_provider || "deepseek") === "gemini" || formSettings.ai_provider === "auto") && (
+                  <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                        Google Gemini (Free Tier) Configuration
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("gemini")}
+                        disabled={apiHealth.gemini.status === "testing"}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.gemini.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-blue-600" />}
+                        <span>Test Gemini</span>
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Gemini Model Identifier</label>
+                      <input
+                        type="text"
+                        value={formSettings.gemini_model || "gemini-2.5-flash"}
+                        onChange={(e) => setFormSettings({ ...formSettings, gemini_model: e.target.value })}
+                        placeholder="gemini-2.5-flash"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[
+                        { name: "Gemini 2.5 Flash (Recommended Free)", model: "gemini-2.5-flash" },
+                        { name: "Gemini 1.5 Flash", model: "gemini-1.5-flash" },
+                        { name: "Gemini 2.0 Flash", model: "gemini-2.0-flash" },
+                      ].map((preset) => {
+                        const isSelected = (formSettings.gemini_model || "gemini-2.5-flash") === preset.model;
+                        return (
+                          <button
+                            key={preset.model}
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                gemini_model: preset.model,
+                              })
+                            }
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-blue-50 border-blue-400 text-blue-700 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <span>{preset.name}</span>
                           </button>
                         );
                       })}
                     </div>
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-textMain mb-1">
-                      AI Model Identifier
-                    </label>
-                    <input
-                      type="text"
-                      value={formSettings.deepseek_model || "deepseek-chat"}
-                      onChange={(e) => setFormSettings({ ...formSettings, deepseek_model: e.target.value })}
-                      placeholder="deepseek-chat"
-                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
-                    />
-                    <span className="text-[10px] text-textMuted">
-                      Standard: <code>deepseek-chat</code>. For OpenRouter: <code>deepseek/deepseek-chat</code> or <code>deepseek/deepseek-r1</code>.
-                    </span>
-                  </div>
-
-                  <div className="flex justify-end pt-2 border-t border-border">
-                    <button
-                      type="button"
-                      onClick={() => testSingleApi("deepseek")}
-                      disabled={apiHealth.deepseek.status === "testing"}
-                      className="px-3.5 py-1.5 text-xs font-semibold rounded-md border border-brand-500 bg-brand-50 hover:bg-brand-100 text-brand-700 flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      {apiHealth.deepseek.status === "testing" ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-600" />
-                      ) : (
-                        <Cpu className="h-3.5 w-3.5 text-brand-600" />
-                      )}
-                      <span>Test AI Endpoint Connection</span>
-                    </button>
-                  </div>
-                </div>
+                )}
               </div>
 
               {/* Encrypted API Keys */}
@@ -4234,7 +4379,76 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* Sub-Group 3: Telegram Alert Credentials */}
+                {/* Sub-Group 3: Google Gemini AI Credentials */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                      <span>Google Gemini API Key (Free Tier)</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("gemini")}
+                      disabled={apiHealth.gemini.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.gemini.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Check className="h-3 w-3 text-blue-600" />
+                      )}
+                      <span>Test Gemini Key</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-textMain">
+                        Google AI Studio Key
+                      </label>
+                      <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-brand-600 hover:underline flex items-center gap-1 font-medium"
+                      >
+                        <span>Get Free Key at Google AI Studio &rarr;</span>
+                      </a>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showSecretKeys["gemini_api_key_override"] ? "text" : "password"}
+                        value={formSettings.gemini_api_key_override || ""}
+                        onChange={(e) =>
+                          setFormSettings({ ...formSettings, gemini_api_key_override: e.target.value })
+                        }
+                        placeholder="AIzaSy••••••••••••••••••••••••••••••••••"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowSecretKeys({
+                            ...showSecretKeys,
+                            gemini_api_key_override: !showSecretKeys["gemini_api_key_override"],
+                          })
+                        }
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showSecretKeys["gemini_api_key_override"] ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-textMuted mt-1 block">
+                      Free tier provides 15 requests per minute and 1,500 requests per day at zero charge.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sub-Group 4: Telegram Alert Credentials */}
                 <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-textMain flex items-center gap-2">

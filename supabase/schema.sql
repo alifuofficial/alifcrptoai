@@ -411,6 +411,11 @@ BEGIN
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS telegram_token_override TEXT DEFAULT NULL;
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS telegram_chat_id_override TEXT DEFAULT NULL;
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'deepseek';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_api_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash';
+    ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
+    ALTER TABLE trade_autopsies ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
 
     -- Ensure singleton row (id = 1) exists
     INSERT INTO bot_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;

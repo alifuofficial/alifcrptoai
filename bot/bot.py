@@ -284,17 +284,108 @@ def get_bybit_client(cfg: Dict[str, Any]) -> ccxt.bybit:
     return exchange
 
 
+def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
+    """
+    Returns an OpenAI-compatible client configured for the selected provider ('deepseek' or 'gemini'),
+    along with the resolved model name.
+    """
+    if provider == "gemini":
+        gemini_key = cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY", "")
+        gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        client = OpenAI(
+            api_key=gemini_key or "dummy-gemini-key",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        return client, gemini_model
+    else:
+        api_key = cfg.get("deepseek_key_override") or os.getenv("DEEPSEEK_API_KEY", "")
+        base_url = cfg.get("deepseek_base_url") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        deepseek_model = cfg.get("deepseek_model") or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        client = OpenAI(
+            api_key=api_key or "sk-dummy-key",
+            base_url=base_url
+        )
+        return client, deepseek_model
+
+
 def get_deepseek_client(cfg: Dict[str, Any]) -> OpenAI:
     """
-    Initializes OpenAI client dynamically pointed at DeepSeek / OpenRouter / BeatAPI endpoint.
-    Supports dynamic routing via deepseek_base_url and deepseek_key_override from bot_config or env.
+    Backwards-compatible wrapper returning the primary OpenAI client.
     """
-    api_key = cfg.get("deepseek_key_override") or os.getenv("DEEPSEEK_API_KEY", "")
-    base_url = cfg.get("deepseek_base_url") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    return OpenAI(
-        api_key=api_key or "sk-dummy-key",
-        base_url=base_url
-    )
+    client, _ = get_ai_client("deepseek", cfg)
+    return client
+
+
+def execute_ai_completion(
+    cfg: Dict[str, Any], 
+    system_prompt: str, 
+    user_prompt: str, 
+    max_tokens: int = 700
+) -> Tuple[str, str]:
+    """
+    Dispatches chat completion respecting cfg['ai_provider']:
+    - 'deepseek': Routes strictly to DeepSeek
+    - 'gemini':   Routes strictly to Google Gemini (Free Tier)
+    - 'auto':     Hybrid Mode: Tries DeepSeek first; if DeepSeek fails with 402 Insufficient Balance
+                  or connection error, automatically falls back to Gemini free tier!
+    Returns (raw_content_string, model_name_used).
+    """
+    provider = str(cfg.get("ai_provider", "deepseek")).strip().lower()
+
+    if provider == "gemini":
+        client, model = get_ai_client("gemini", cfg)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=max_tokens
+        )
+        return (resp.choices[0].message.content or "{}"), model
+
+    elif provider == "auto":
+        # Hybrid Auto-Fallback Mode: DeepSeek primary -> Gemini backup
+        primary_client, primary_model = get_ai_client("deepseek", cfg)
+        try:
+            resp = primary_client.chat.completions.create(
+                model=primary_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=max_tokens
+            )
+            return (resp.choices[0].message.content or "{}"), primary_model
+        except Exception as ds_err:
+            print(f"[ai_router] DeepSeek error ({ds_err}). Auto-falling back to Google Gemini free tier...")
+            gemini_client, gemini_model = get_ai_client("gemini", cfg)
+            resp = gemini_client.chat.completions.create(
+                model=gemini_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=max_tokens
+            )
+            return (resp.choices[0].message.content or "{}"), gemini_model
+
+    else:
+        # Default: deepseek
+        client, model = get_ai_client("deepseek", cfg)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=max_tokens
+        )
+        return (resp.choices[0].message.content or "{}"), model
 
 
 # --- CONFIGURATION LAYER ---
@@ -337,6 +428,9 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "quarantined_symbols": [],
         "deepseek_model": "deepseek-chat",
         "deepseek_base_url": "https://api.deepseek.com",
+        "ai_provider": "deepseek",
+        "gemini_api_key_override": None,
+        "gemini_model": "gemini-2.5-flash",
         "exchange_mode": "binance",
         "bybit_api_key_override": None,
         "bybit_secret_override": None,
@@ -736,16 +830,12 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
     }
 
     try:
-        response = deepseek_client.chat.completions.create(
-            model=cfg.get("deepseek_model", "deepseek-chat"),
-            messages=[
-                {"role": "system", "content": AUTOPSY_PROMPT},
-                {"role": "user", "content": f"Analyze this closed loss trade:\n{json.dumps(payload, indent=2)}"}
-            ],
-            temperature=0.1,
+        content, model_used = execute_ai_completion(
+            cfg,
+            system_prompt=AUTOPSY_PROMPT,
+            user_prompt=f"Analyze this closed loss trade:\n{json.dumps(payload, indent=2)}",
             max_tokens=600
         )
-        content = response.choices[0].message.content or "{}"
         autopsy_data = parse_ai_json(content)
 
         # 1. Insert into trade_autopsies
@@ -754,6 +844,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
             "symbol": trade["symbol"],
             "strategy_name": trade["strategy_name"],
             "outcome": "LOSS",
+            "ai_model": model_used,
             "failure_category": autopsy_data.get("failure_category", "premature_entry_before_sweep"),
             "root_cause_analysis": autopsy_data.get("root_cause_analysis", "Liquidity sweep was shallow."),
             "recommended_rule_adjustment": autopsy_data.get("recommended_rule_adjustment", "Enforce higher RVOL.")
@@ -1336,22 +1427,20 @@ def scan_and_execute_signals(
                     "macro_blackout_state": macro_status
                 }
 
-                print(f"[scanner] Requesting DeepSeek Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()})...")
+                active_prov = str(cfg.get("ai_provider", "deepseek")).upper()
+                print(f"[scanner] Requesting AI Risk Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()}) via {active_prov}...")
+                model_used = cfg.get("deepseek_model", "deepseek-chat")
                 try:
-                    response = deepseek_client.chat.completions.create(
-                        model=cfg.get("deepseek_model", "deepseek-chat"),
-                        messages=[
-                            {"role": "system", "content": SYSTEM_AUDIT_PROMPT},
-                            {"role": "user", "content": f"Audit this candidate setup:\n{json.dumps(audit_payload, indent=2)}"}
-                        ],
-                        temperature=0.1,
+                    content, model_used = execute_ai_completion(
+                        cfg,
+                        system_prompt=SYSTEM_AUDIT_PROMPT,
+                        user_prompt=f"Audit this candidate setup:\n{json.dumps(audit_payload, indent=2)}",
                         max_tokens=700
                     )
-                    content = response.choices[0].message.content or "{}"
                     raw_audit = parse_ai_json(content)
                 except Exception as ai_err:
-                    print(f"[scanner] DeepSeek API audit warning: {ai_err}")
-                    raw_audit = {"veto_triggered": True, "veto_reason": "AI API communication failure"}
+                    print(f"[scanner] AI API audit warning: {ai_err}")
+                    raw_audit = {"veto_triggered": True, "veto_reason": f"AI API communication failure ({ai_err})"}
 
                 total_score, veto_triggered, veto_reason, rubric = verify_and_score_audit(raw_audit)
 
@@ -1360,6 +1449,7 @@ def scan_and_execute_signals(
                     "symbol": symbol,
                     "exchange": exchange_name,
                     "asset_class": asset_class,
+                    "ai_model": model_used,
                     "forex_session": session_info["session_name"] if session_info else None,
                     "spread_pips": spread_pips,
                     "strategy_name": strat_name,
