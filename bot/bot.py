@@ -838,8 +838,9 @@ def manage_open_positions(
             new_mfe = max(float(t.get("mfe_r", 0.0) or 0.0), curr_r)
             new_mae = min(float(t.get("mae_r", 0.0) or 0.0), curr_r)
 
-            # --- +1.0R BREAK-EVEN & 50% PARTIAL PROFIT LOCK ---
-            if (curr_r >= 1.0 and 
+            # --- +0.8R BREAK-EVEN & 50% PARTIAL PROFIT LOCK ---
+            be_threshold = float(cfg.get("breakeven_trigger_r", 0.8))
+            if (curr_r >= be_threshold and 
                 cfg.get("enable_breakeven_partial", True) and 
                 not breakeven_activated):
 
@@ -850,7 +851,7 @@ def manage_open_positions(
                 new_sl_id = f"sim_be_sl_{int(time.time())}" if is_sim else None
 
                 if not is_sim:
-                    print(f"[trade_mgmt] +1.0R reached for {symbol} trade #{trade_id} ({trade_exchange}). Executing 50% partial TP and moving SL to BE!")
+                    print(f"[trade_mgmt] +{be_threshold}R reached for {symbol} trade #{trade_id} ({trade_exchange}). Executing 50% partial TP and moving SL to BE!")
                     close_side = "sell" if side == "LONG" else "buy"
                     try:
                         exchange.create_market_order(
@@ -886,7 +887,7 @@ def manage_open_positions(
                     except Exception as e:
                         print(f"[trade_mgmt] Place BE SL warning: {e}")
                 else:
-                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +1.0R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${format_price_dynamic(be_sl_price)}!")
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +{be_threshold}R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${format_price_dynamic(be_sl_price)}!")
 
                 # Update database record
                 supabase.table("trade_executions").update({
@@ -987,7 +988,7 @@ def manage_open_positions(
                 }
                 supabase.table("trade_executions").update(t_closed).eq("id", trade_id).execute()
 
-                if status == "CLOSED_SL":
+                if status == "CLOSED_SL" and pnl_r < 0:
                     run_trade_autopsy(supabase, deepseek_client, cfg, t_closed)
                 else:
                     notify_trade_closed(cfg, t_closed)

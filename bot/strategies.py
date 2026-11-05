@@ -33,8 +33,12 @@ def get_price_decimals(price: float) -> int:
     p = abs(float(price)) if price is not None else 0.0
     if p >= 1000.0:
         return 2
-    elif p >= 1.0:
+    elif p >= 2.0:
         return 4
+    elif p >= 0.5:
+        # Institutional Forex Tier (EUR/USD, GBP/USD, AUD/USD, USD/CAD, USD/CHF)
+        # Trades with 5 decimal places (pipettes, where 1 pip = 0.00010)
+        return 5
     elif p >= 0.01:
         return 6
     else:
@@ -55,6 +59,44 @@ def format_price_dynamic(price: float) -> str:
         return "0.00"
     decimals = get_price_decimals(price)
     return f"{float(price):.{decimals}f}"
+
+
+def finalize_setup_geometry(side: str, entry: float, sl: float, target_rr: float = 2.2) -> tuple:
+    """
+    Enforces institutional precision, minimum noise buffers for Forex,
+    and exact mathematical consistency between Entry, SL, TP, and stated R:R.
+    Returns (entry_rounded, sl_rounded, tp_rounded, actual_rr).
+    """
+    entry_r = round_price_dynamic(entry)
+    sl_r = round_price_dynamic(sl)
+
+    # 1. Forex minimum stop buffer protection:
+    # Assets in the 0.5 to 2.0 range (EUR/USD, GBP/USD, etc.) must have at least 10 pips (0.0010)
+    # stop distance so they cannot be suffocated by 15m session noise or spread.
+    if 0.5 <= entry_r <= 2.0:
+        min_forex_buffer = 0.0010  # 10 pips minimum buffer
+        curr_buffer = abs(entry_r - sl_r)
+        if curr_buffer < min_forex_buffer:
+            if side == "LONG":
+                sl_r = round_price_dynamic(entry_r - min_forex_buffer)
+            else:
+                sl_r = round_price_dynamic(entry_r + min_forex_buffer)
+
+    risk_r = abs(entry_r - sl_r)
+    if risk_r <= 1e-7:
+        risk_r = max(abs(entry_r * 0.005), 1e-5)
+        sl_r = round_price_dynamic(entry_r - risk_r if side == "LONG" else entry_r + risk_r)
+        risk_r = abs(entry_r - sl_r)
+
+    # 2. Derive TP directly from rounded entry, sl, and target_rr to guarantee 100% mathematical consistency
+    if side == "LONG":
+        tp_r = round_price_dynamic(entry_r + (target_rr * risk_r))
+        actual_rr = round((tp_r - entry_r) / max(risk_r, 1e-9), 2)
+    else:
+        tp_r = round_price_dynamic(entry_r - (target_rr * risk_r))
+        actual_rr = round((entry_r - tp_r) / max(risk_r, 1e-9), 2)
+
+    return entry_r, sl_r, tp_r, actual_rr
 
 
 def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -171,16 +213,14 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             swept_low = min(float(prev["low"]), float(curr["low"]))
             entry = float(curr["close"])
             sl = swept_low - (0.5 * atr)
-            risk = entry - sl
-            if risk > 0:
-                tp = entry + (2.5 * risk)
-                rr = round((tp - entry) / risk, 2)
+            if entry > sl:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "LONG",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Swept 15-bar low ({format_price_dynamic(swing_low)}) with bullish displacement reclaim. Verified Bullish FVG. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -197,16 +237,14 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             swept_high = max(float(prev["high"]), float(curr["high"]))
             entry = float(curr["close"])
             sl = swept_high + (0.5 * atr)
-            risk = sl - entry
-            if risk > 0:
-                tp = entry - (2.5 * risk)
-                rr = round((entry - tp) / risk, 2)
+            if sl > entry:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "SHORT",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Swept 15-bar high ({format_price_dynamic(swing_high)}) with bearish displacement reclaim. Verified Bearish FVG. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -296,14 +334,13 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             sl = sl_anchor * 0.997
             risk = entry - sl
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                tp = entry + (2.3 * risk)
-                rr = round((tp - entry) / risk, 2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.3)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "LONG",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -336,14 +373,13 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             sl = sl_anchor * 1.003
             risk = sl - entry
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                tp = entry - (2.3 * risk)
-                rr = round((entry - tp) / risk, 2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.3)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "SHORT",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -473,16 +509,14 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # --- Bullish Supertrend Flip (-1 -> 1) ---
     if prev_dir == -1 and curr_dir == 1:
         sl = st_line if st_line < entry else (entry - (1.5 * atr))
-        risk = entry - sl
-        if risk > 0:
-            tp = entry + (2.2 * risk)
-            rr = round((tp - entry) / risk, 2)
+        if entry > sl:
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "LONG",
-                "entry": round_price_dynamic(entry),
-                "sl": round_price_dynamic(sl),
-                "tp": round_price_dynamic(tp),
+                "entry": entry_r,
+                "sl": sl_r,
+                "tp": tp_r,
                 "setup_notes": f"Supertrend Bullish Flip (-1->1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -491,16 +525,14 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # --- Bearish Supertrend Flip (1 -> -1) ---
     if prev_dir == 1 and curr_dir == -1:
         sl = st_line if st_line > entry else (entry + (1.5 * atr))
-        risk = sl - entry
-        if risk > 0:
-            tp = entry - (2.2 * risk)
-            rr = round((entry - tp) / risk, 2)
+        if sl > entry:
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "SHORT",
-                "entry": round_price_dynamic(entry),
-                "sl": round_price_dynamic(sl),
-                "tp": round_price_dynamic(tp),
+                "entry": entry_r,
+                "sl": sl_r,
+                "tp": tp_r,
                 "setup_notes": f"Supertrend Bearish Flip (1->-1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -534,16 +566,14 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             entry = float(curr["close"])
             # SL placed below EMA 50 or 1.5 * ATR
             sl = min(ema_50 - (0.3 * atr), entry - (1.5 * atr))
-            risk = entry - sl
-            if risk > 0:
-                tp = entry + (2.2 * risk)
-                rr = round((tp - entry) / risk, 2)
+            if entry > sl:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "LONG",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Bullish dynamic bounce off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -555,16 +585,14 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if float(curr["high"]) >= ema_20 * 0.998 and float(curr["close"]) < ema_20 and float(curr["close"]) < float(curr["open"]):
             entry = float(curr["close"])
             sl = max(ema_50 + (0.3 * atr), entry + (1.5 * atr))
-            risk = sl - entry
-            if risk > 0:
-                tp = entry - (2.2 * risk)
-                rr = round((entry - tp) / risk, 2)
+            if sl > entry:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "SHORT",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"Bearish dynamic rejection off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -601,16 +629,14 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Bullish Breakout
     if entry > bb_upper and rvol >= 1.4 and float(curr["close"]) > float(curr["open"]):
         sl = max(bb_mid, entry - (1.5 * atr))
-        risk = entry - sl
-        if risk > 0:
-            tp = entry + (2.5 * risk)
-            rr = round((tp - entry) / risk, 2)
+        if entry > sl:
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "LONG",
-                "entry": round_price_dynamic(entry),
-                "sl": round_price_dynamic(sl),
-                "tp": round_price_dynamic(tp),
+                "entry": entry_r,
+                "sl": sl_r,
+                "tp": tp_r,
                 "setup_notes": f"Bollinger Squeeze Breakout Upper. Width expanded from <0.025. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -619,16 +645,14 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Bearish Breakout
     if entry < bb_lower and rvol >= 1.4 and float(curr["close"]) < float(curr["open"]):
         sl = min(bb_mid, entry + (1.5 * atr))
-        risk = sl - entry
-        if risk > 0:
-            tp = entry - (2.5 * risk)
-            rr = round((entry - tp) / risk, 2)
+        if sl > entry:
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "SHORT",
-                "entry": round_price_dynamic(entry),
-                "sl": round_price_dynamic(sl),
-                "tp": round_price_dynamic(tp),
+                "entry": entry_r,
+                "sl": sl_r,
+                "tp": tp_r,
                 "setup_notes": f"Bollinger Squeeze Breakout Lower. Width expanded from <0.025. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
@@ -665,16 +689,14 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if is_bullish_engulfing:
             entry = float(curr["close"])
             sl = min(float(curr["low"]), float(prev["low"])) - (0.5 * atr)
-            risk = entry - sl
-            if risk > 0:
-                tp = entry + (2.2 * risk)
-                rr = round((tp - entry) / risk, 2)
+            if entry > sl:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "LONG",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"RSI Oversold Exhaustion Reclaim ({curr_rsi:.1f}). Bullish Engulfing. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
@@ -691,16 +713,14 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if is_bearish_engulfing:
             entry = float(curr["close"])
             sl = max(float(curr["high"]), float(prev["high"])) + (0.5 * atr)
-            risk = sl - entry
-            if risk > 0:
-                tp = entry - (2.2 * risk)
-                rr = round((entry - tp) / risk, 2)
+            if sl > entry:
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "SHORT",
-                    "entry": round_price_dynamic(entry),
-                    "sl": round_price_dynamic(sl),
-                    "tp": round_price_dynamic(tp),
+                    "entry": entry_r,
+                    "sl": sl_r,
+                    "tp": tp_r,
                     "setup_notes": f"RSI Overbought Exhaustion Rejection ({curr_rsi:.1f}). Bearish Engulfing. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
