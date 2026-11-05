@@ -136,8 +136,12 @@ def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
                     if usdt_candidate in exchange.markets:
                         return usdt_candidate
                 raw_id = clean.replace("/", "")
+                bybit_raw = f"{raw_id}USDT"
                 for m_sym, m_data in exchange.markets.items():
-                    if m_data.get("id") == raw_id:
+                    m_id = str(m_data.get("id", "")).upper()
+                    if m_id in (raw_id, bybit_raw):
+                        return m_sym
+                    if m_sym in (f"{raw_id}/USDT:USDT", f"{raw_id}/USDT", f"{clean}:USDT"):
                         return m_sym
         except Exception:
             pass
@@ -1193,6 +1197,10 @@ def scan_and_execute_signals(
                     continue
 
         ex_sym = resolve_exchange_symbol(exchange, symbol)
+        if exchange and hasattr(exchange, "markets") and exchange.markets and ex_sym not in exchange.markets:
+            if _SCAN_HEARTBEAT_COUNT % 12 == 1:
+                print(f"[scanner] Notice: {symbol} is not listed on {exchange_name} Unified Trading Account. Skipping.")
+            continue
 
         try:
             # Check if there is already an open trade for this symbol
