@@ -122,6 +122,12 @@ def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
 
     # Preserve Forex & Commodity CFD symbols (do NOT convert to /USDT)
     if is_forex_symbol(clean):
+        # Direct fallback for Bybit V5 Linear FX perpetuals
+        if exchange and "bybit" in getattr(exchange, "id", "").lower():
+            raw_no_slash = clean.replace("/", "")
+            if raw_no_slash in ("EURUSD", "GBPUSD"):
+                return f"{raw_no_slash}/USDT:USDT"
+
         try:
             if exchange and hasattr(exchange, "markets") and exchange.markets:
                 if clean in exchange.markets:
