@@ -526,7 +526,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "forex_max_leverage": 30,
         "forex_weekend_shield": True,
         "forex_rollover_shield": True,
-        "forex_max_spread_pips": 1.5,
+        "forex_max_spread_pips": 3.5,
         "panic_close_target": "ALL",
         "panic_close_all": False
     }
@@ -1440,9 +1440,9 @@ def scan_and_execute_signals(
                     if ask > 0 and bid > 0:
                         pip_sz = get_forex_pip_size(symbol)
                         spread_pips = round(abs(ask - bid) / pip_sz, 1)
-                        max_spread = float(cfg.get("forex_max_spread_pips", 1.5) or 1.5)
+                        max_spread = float(cfg.get("forex_max_spread_pips", 3.5) or 3.5)
                         if spread_pips > max_spread:
-                            print(f"[scanner] Skipping {symbol}: Broker spread {spread_pips} pips exceeds max threshold {max_spread} pips.")
+                            print(f"[scanner] Skipping {symbol}: Broker spread {spread_pips} pips exceeds max threshold {max_spread} pips (adjust in dashboard settings if desired).")
                             continue
                 except Exception:
                     pass

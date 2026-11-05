@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     forex_max_leverage INT NOT NULL DEFAULT 30,
     forex_weekend_shield BOOLEAN NOT NULL DEFAULT true,
     forex_rollover_shield BOOLEAN NOT NULL DEFAULT true,
-    forex_max_spread_pips NUMERIC NOT NULL DEFAULT 1.5,
+    forex_max_spread_pips NUMERIC NOT NULL DEFAULT 3.5,
     deepseek_key_override TEXT DEFAULT NULL,
     telegram_token_override TEXT DEFAULT NULL,
     telegram_chat_id_override TEXT DEFAULT NULL,

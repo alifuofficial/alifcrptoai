@@ -958,7 +958,7 @@ export default function CommandCenterPage() {
         forex_max_leverage: Number(formSettings.forex_max_leverage ?? 20),
         forex_weekend_shield: Boolean(formSettings.forex_weekend_shield ?? true),
         forex_rollover_shield: Boolean(formSettings.forex_rollover_shield ?? true),
-        forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.0),
+        forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.5),
         ai_provider: formSettings.ai_provider || "deepseek",
         gemini_api_key_override: formSettings.gemini_api_key_override?.trim() || null,
         gemini_model: formSettings.gemini_model || "gemini-3.1-flash-lite",
@@ -3845,20 +3845,42 @@ export default function CommandCenterPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <label className="block text-xs font-semibold text-textMain mb-1">
-                      Max Forex Spread Filter: <span className="text-amber-700 font-bold">{formSettings.forex_max_spread_pips ?? 3.0} pips</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-textMain">
+                        Max Forex Spread Filter: <span className="text-amber-700 font-bold">{formSettings.forex_max_spread_pips ?? 3.5} pips</span>
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {[
+                          { label: "2.0 pips", val: 2.0 },
+                          { label: "3.5 pips (Bybit)", val: 3.5 },
+                          { label: "5.0 pips", val: 5.0 },
+                        ].map((preset) => (
+                          <button
+                            key={preset.val}
+                            type="button"
+                            onClick={() => setFormSettings({ ...formSettings, forex_max_spread_pips: preset.val })}
+                            className={`px-1.5 py-0.5 text-[9px] rounded font-medium border transition-colors cursor-pointer ${
+                              (formSettings.forex_max_spread_pips ?? 3.5) === preset.val
+                                ? "bg-amber-100 text-amber-800 border-amber-300 font-bold"
+                                : "bg-slate-50 text-textMuted border-border hover:bg-slate-100"
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <input
                       type="range"
                       min="1.0"
                       max="10.0"
                       step="0.5"
-                      value={formSettings.forex_max_spread_pips ?? 3.0}
+                      value={formSettings.forex_max_spread_pips ?? 3.5}
                       onChange={(e) => setFormSettings({ ...formSettings, forex_max_spread_pips: parseFloat(e.target.value) })}
                       className="w-full accent-amber-600 cursor-pointer"
                     />
                     <span className="text-[10px] text-textMuted">
-                      Rejects entries if live broker bid-ask spread exceeds this threshold (prevents rollover slippage).
+                      Rejects entries if live broker spread exceeds this. Standard on Bybit order book is 2.0 - 3.5 pips. Recommended: <strong>3.5 pips</strong>.
                     </span>
                   </div>
 

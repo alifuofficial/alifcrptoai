@@ -31,6 +31,9 @@ export async function GET() {
       ) {
         existing.gemini_model = "gemini-3.1-flash-lite";
       }
+      if (!existing.forex_max_spread_pips || Number(existing.forex_max_spread_pips) <= 1.5) {
+        existing.forex_max_spread_pips = 3.5;
+      }
       return NextResponse.json({
         success: true,
         data: existing,
@@ -78,7 +81,7 @@ export async function GET() {
       forex_max_leverage: 30,
       forex_weekend_shield: true,
       forex_rollover_shield: true,
-      forex_max_spread_pips: 1.5,
+      forex_max_spread_pips: 3.5,
       panic_close_target: "ALL",
       panic_close_all: false,
     };
