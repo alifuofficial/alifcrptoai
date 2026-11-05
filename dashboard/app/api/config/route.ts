@@ -74,7 +74,7 @@ export async function GET() {
       bybit_api_key_override: null,
       bybit_secret_override: null,
       enable_forex_trading: true,
-      forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"],
+      forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "XAG/USD"],
       forex_max_leverage: 30,
       forex_weekend_shield: true,
       forex_rollover_shield: true,

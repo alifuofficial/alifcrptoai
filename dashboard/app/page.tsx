@@ -3778,36 +3778,36 @@ export default function CommandCenterPage() {
                       onClick={() =>
                         setFormSettings({
                           ...formSettings,
+                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "XAG/USD"],
+                        })
+                      }
+                      className="px-2.5 py-1 text-[10px] font-semibold bg-amber-600 hover:bg-amber-700 text-white rounded transition-colors shadow-xs cursor-pointer"
+                    >
+                      ★ Bybit UTA Listed (All 5)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          forex_symbols: ["XAU/USD", "XAG/USD"],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-amber-50 hover:bg-amber-100 text-amber-800 rounded transition-colors border border-amber-200 cursor-pointer"
+                    >
+                      Gold & Silver (2)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
                           forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY"],
                         })
                       }
-                      className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-textMain rounded transition-colors"
+                      className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-textMain rounded transition-colors cursor-pointer"
                     >
-                      Core Majors (3)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFormSettings({
-                          ...formSettings,
-                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"],
-                        })
-                      }
-                      className="px-2 py-0.5 text-[10px] font-medium bg-amber-50 hover:bg-amber-100 text-amber-800 rounded transition-colors border border-amber-200"
-                    >
-                      G10 Majors (7)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFormSettings({
-                          ...formSettings,
-                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "XAU/USD", "XAG/USD"],
-                        })
-                      }
-                      className="px-2 py-0.5 text-[10px] font-medium bg-amber-600 hover:bg-amber-700 text-white rounded transition-colors shadow-xs"
-                    >
-                      Majors + Gold (Recommended)
+                      FX Majors (3)
                     </button>
                   </div>
                 </div>
@@ -3820,12 +3820,14 @@ export default function CommandCenterPage() {
                       forex_symbols: e.target.value.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
                     })
                   }
-                  placeholder="EUR/USD, GBP/USD, USD/JPY, XAU/USD"
+                  placeholder="EUR/USD, GBP/USD, USD/JPY, XAU/USD, XAG/USD"
                   className="w-full rounded-md border border-border bg-slate-50 py-2.5 px-4 text-xs text-textMain font-mono focus:border-amber-500 focus:bg-white focus:outline-hidden"
                 />
-                <div className="flex items-center justify-between text-[10px] text-textMuted">
-                  <span>Standard Forex pairs with slash formatting (never converted to USDT).</span>
-                  <span>Active count: <strong className="text-textMain font-semibold">{(formSettings.forex_symbols || []).length} pairs</strong></span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[10px] text-textMuted gap-1">
+                  <span>
+                    <strong>Note:</strong> Bybit V5 Unified Trading Account (UTA) lists <strong>EUR/USD</strong>, <strong>GBP/USD</strong>, <strong>USD/JPY</strong>, <strong>XAU/USD (Gold)</strong>, and <strong>XAG/USD (Silver)</strong>. Other pairs (AUD/USD, USD/CAD) require Bybit MT5.
+                  </span>
+                  <span className="shrink-0 font-medium text-textMain">Active: {(formSettings.forex_symbols || []).length} pairs</span>
                 </div>
               </div>
 

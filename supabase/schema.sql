@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     bybit_secret_override TEXT DEFAULT NULL,
     exchange_mode TEXT NOT NULL DEFAULT 'binance' CHECK (exchange_mode IN ('binance', 'bybit', 'dual')),
     enable_forex_trading BOOLEAN NOT NULL DEFAULT true,
-    forex_symbols TEXT[] NOT NULL DEFAULT ARRAY['EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'XAU/USD'],
+    forex_symbols TEXT[] NOT NULL DEFAULT ARRAY['EUR/USD', 'GBP/USD', 'USD/JPY', 'XAU/USD', 'XAG/USD'],
     forex_max_leverage INT NOT NULL DEFAULT 30,
     forex_weekend_shield BOOLEAN NOT NULL DEFAULT true,
     forex_rollover_shield BOOLEAN NOT NULL DEFAULT true,

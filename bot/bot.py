@@ -122,32 +122,76 @@ def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
 
     # Preserve Forex & Commodity CFD symbols (do NOT convert to /USDT)
     if is_forex_symbol(clean):
-        # Direct fallback for Bybit V5 Linear FX perpetuals
+        # Direct mapping for Bybit V5 Linear FX, Gold, and Silver perpetuals
         if exchange and "bybit" in getattr(exchange, "id", "").lower():
-            raw_no_slash = clean.replace("/", "")
-            if raw_no_slash in ("EURUSD", "GBPUSD"):
-                return f"{raw_no_slash}/USDT:USDT"
+            bybit_fx_map = {
+                "XAU/USD": "XAU/USDT:USDT",
+                "XAUUSD": "XAU/USDT:USDT",
+                "GOLD": "XAU/USDT:USDT",
+                "XAU/USDT": "XAU/USDT:USDT",
+                "XAG/USD": "XAG/USDT:USDT",
+                "XAGUSD": "XAG/USDT:USDT",
+                "SILVER": "XAG/USDT:USDT",
+                "XAG/USDT": "XAG/USDT:USDT",
+                "EUR/USD": "EURUSD/USDT:USDT",
+                "EURUSD": "EURUSD/USDT:USDT",
+                "EUR/USDT": "EURUSD/USDT:USDT",
+                "GBP/USD": "GBPUSD/USDT:USDT",
+                "GBPUSD": "GBPUSD/USDT:USDT",
+                "GBP/USDT": "GBPUSD/USDT:USDT",
+                "USD/JPY": "USDJPY/USDT:USDT",
+                "USDJPY": "USDJPY/USDT:USDT",
+                "USD/JPY:USDT": "USDJPY/USDT:USDT",
+                "USDBRL/USD": "USDBRL/USDT:USDT",
+                "USDBRL": "USDBRL/USDT:USDT",
+                "PAXG/USD": "PAXG/USDT:USDT",
+                "PAXG/USDT": "PAXG/USDT:USDT",
+                "XAUT/USD": "XAUT/USDT:USDT",
+                "XAUT/USDT": "XAUT/USDT:USDT",
+            }
+            if clean in bybit_fx_map:
+                target = bybit_fx_map[clean]
+                if hasattr(exchange, "markets") and exchange.markets:
+                    if target in exchange.markets:
+                        return target
+                    # Try fallback key variants in CCXT's market dictionary
+                    for alt in (
+                        target.split(":")[0],
+                        target.replace("/USDT:USDT", "USDT"),
+                        target.replace("/USDT:USDT", "/USDT"),
+                        clean
+                    ):
+                        if alt in exchange.markets:
+                            return alt
+                return target
 
         try:
             if exchange and hasattr(exchange, "markets") and exchange.markets:
                 if clean in exchange.markets:
                     return clean
-                # Check for Bybit linear settlement suffix (e.g. EUR/USD:USDT or EUR/USDT:USDT)
-                if "/" in clean:
-                    quote = clean.split("/")[1]
-                    candidate = f"{clean}:{quote}"
-                    if candidate in exchange.markets:
-                        return candidate
-                    usdt_candidate = f"{clean}:USDT"
-                    if usdt_candidate in exchange.markets:
-                        return usdt_candidate
-                raw_id = clean.replace("/", "")
-                bybit_raw = f"{raw_id}USDT"
+
+                # Dynamic candidate checks for Bybit linear
+                base = clean.split("/")[0] if "/" in clean else clean
+                raw_base = base.replace("USD", "").replace("USDT", "") or base
+                candidates = [
+                    f"{base}/USDT:USDT",
+                    f"{raw_base}/USDT:USDT",
+                    f"{base}/USDT",
+                    f"{raw_base}/USDT",
+                    f"{clean}:USDT",
+                    f"{base}USDT",
+                    f"{raw_base}USDT"
+                ]
+                for c in candidates:
+                    if c in exchange.markets:
+                        return c
+
+                # Look up by market ID or base ID in markets
+                raw_clean = clean.replace("/", "").replace(":", "")
                 for m_sym, m_data in exchange.markets.items():
                     m_id = str(m_data.get("id", "")).upper()
-                    if m_id in (raw_id, bybit_raw):
-                        return m_sym
-                    if m_sym in (f"{raw_id}/USDT:USDT", f"{raw_id}/USDT", f"{clean}:USDT"):
+                    m_base = str(m_data.get("base", "")).upper()
+                    if m_id in (raw_clean, f"{raw_clean}USDT", f"{base}USDT", f"{raw_base}USDT") or m_base in (base, raw_base):
                         return m_sym
         except Exception:
             pass
@@ -203,12 +247,22 @@ def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
 
 def to_canonical_symbol(symbol: str) -> str:
     """
-    Translates CCXT exchange market symbols (e.g. 'BTC/USDT:USDT' or 'BTCUSDT')
-    back to the canonical dashboard format 'BTC/USDT'.
+    Translates CCXT exchange market symbols (e.g. 'BTC/USDT:USDT' or 'BTCUSDT' or 'XAU/USDT:USDT')
+    back to the canonical dashboard format 'BTC/USDT', 'EUR/USD', 'XAU/USD'.
     """
     if not symbol:
         return symbol
     clean = str(symbol).strip().upper()
+    if clean in ("XAU/USDT:USDT", "XAU/USDT", "XAUUSDT"):
+        return "XAU/USD"
+    if clean in ("XAG/USDT:USDT", "XAG/USDT", "XAGUSDT"):
+        return "XAG/USD"
+    if clean in ("EURUSD/USDT:USDT", "EURUSD/USDT", "EURUSDUSDT"):
+        return "EUR/USD"
+    if clean in ("GBPUSD/USDT:USDT", "GBPUSD/USDT", "GBPUSDUSDT"):
+        return "GBP/USD"
+    if clean in ("USDJPY/USDT:USDT", "USDJPY/USDT", "USDJPYUSDT"):
+        return "USD/JPY"
     if ":" in clean:
         return clean.split(":")[0]
     return clean
@@ -468,7 +522,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "bybit_api_key_override": None,
         "bybit_secret_override": None,
         "enable_forex_trading": True,
-        "forex_symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"],
+        "forex_symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "XAG/USD"],
         "forex_max_leverage": 30,
         "forex_weekend_shield": True,
         "forex_rollover_shield": True,
@@ -1329,9 +1383,25 @@ def scan_and_execute_signals(
 
         ex_sym = resolve_exchange_symbol(exchange, symbol)
         if exchange and hasattr(exchange, "markets") and exchange.markets and ex_sym not in exchange.markets:
-            if _SCAN_HEARTBEAT_COUNT % 12 == 1:
-                print(f"[scanner] Notice: {symbol} is not listed on {exchange_name} Unified Trading Account. Skipping.")
-            continue
+            # Secondary check: does exchange know this symbol under an alternative key format?
+            found_sym = None
+            for alt_cand in (
+                ex_sym.split(":")[0] if ":" in ex_sym else ex_sym,
+                ex_sym.replace("/USDT:USDT", "USDT"),
+                ex_sym.replace("/USDT", "USDT"),
+                ex_sym.replace("/", ""),
+                symbol.replace("/", "") + "USDT"
+            ):
+                if alt_cand in exchange.markets:
+                    found_sym = alt_cand
+                    break
+            if found_sym:
+                ex_sym = found_sym
+            else:
+                if _SCAN_HEARTBEAT_COUNT % 12 == 1:
+                    mt5_note = " (requires Bybit MT5 account for traditional CFDs)" if is_fx else ""
+                    print(f"[scanner] Notice: {symbol} is not listed on {exchange_name} Unified Trading Account{mt5_note}. Skipping.")
+                continue
 
         try:
             # Check if there is already an open trade for this symbol
