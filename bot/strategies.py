@@ -389,7 +389,11 @@ def calc_top_down_structure(
     }
 
 
-def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def smc_liquidity_sweep(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     SMC Liquidity Sweep Strategy (Top-Down Multi-Timeframe Price Action):
     1. Scans for 15m sweep of a confirmed Fractal Swing or Equal High/Low (EQH/EQL) liquidity pool.
@@ -397,6 +401,7 @@ def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, A
     3. Enforces 4H Trend and 1H Dealing Range discipline:
        - LONG: 4H != BEARISH, 1H in DISCOUNT (depth <= 52%) or OTE.
        - SHORT: 4H != BULLISH, 1H in PREMIUM (depth >= 48%) or OTE.
+    4. Projects dynamic Take Profit using configurable target_rr.
     """
     if len(df) < 30:
         return None
@@ -459,7 +464,7 @@ def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, A
             entry = float(curr["close"])
             sl = swept_low - (0.5 * atr)
             if entry > sl:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
                 ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
                 pool_desc = "Equal Lows (EQL)" if eql_pools and sweep_target_low == eql_pools[-1]["price"] else "15m Fractal Low"
                 return {
@@ -491,7 +496,7 @@ def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, A
             entry = float(curr["close"])
             sl = swept_high + (0.5 * atr)
             if sl > entry:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
                 ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
                 pool_desc = "Equal Highs (EQH)" if eqh_pools and sweep_target_high == eqh_pools[-1]["price"] else "15m Fractal High"
                 return {
@@ -508,7 +513,11 @@ def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, A
     return None
 
 
-def strat_ict_orderblock_fvg(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def strat_ict_orderblock_fvg(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     ICT Order Block + Fair Value Gap Strategy (smartmoneyconcepts library):
     1. Detects structural swing points with smc.swing_highs_lows.
@@ -610,7 +619,7 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame, top_down_context: Optional[Dict[s
             sl = sl_anchor * 0.997
             risk = entry - sl
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.3)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "LONG",
@@ -656,7 +665,7 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame, top_down_context: Optional[Dict[s
             sl = sl_anchor * 1.003
             risk = sl - entry
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.3)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "SHORT",
@@ -740,14 +749,18 @@ def _calc_supertrend_adx_math(df: pd.DataFrame, length: int = 10, multiplier: fl
         return None, None, None, None
 
 
-def strat_supertrend_adx(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def strat_supertrend_adx(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     Supertrend + ADX Momentum Strategy (pandas-ta-classic library with auto-math fallback):
     1. Computes Supertrend (10, 3.0) and ADX (14).
     2. Detects direction flip on latest closed candle (from -1 to 1 for LONG, or 1 to -1 for SHORT).
     3. Confirms trend strength: ADX_14 > 25 and RVOL >= 1.2.
     4. Top-Down Guardrail: Blocks chasing into extreme HTF boundaries (no longs at >70% range, no shorts at <30%).
-    5. Sets SL at the active Supertrend line and TP at 2.2R.
+    5. Sets SL at the active Supertrend line and TP dynamically using target_rr.
     """
     if len(df) < 30:
         return None
@@ -809,7 +822,7 @@ def strat_supertrend_adx(df: pd.DataFrame, top_down_context: Optional[Dict[str, 
 
         sl = st_line if st_line < entry else (entry - (1.5 * atr))
         if entry > sl:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "LONG",
@@ -831,7 +844,7 @@ def strat_supertrend_adx(df: pd.DataFrame, top_down_context: Optional[Dict[str, 
 
         sl = st_line if st_line > entry else (entry + (1.5 * atr))
         if sl > entry:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "SHORT",
@@ -846,12 +859,16 @@ def strat_supertrend_adx(df: pd.DataFrame, top_down_context: Optional[Dict[str, 
     return None
 
 
-def ema_trend_pullback(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def ema_trend_pullback(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     EMA Trend Pullback Strategy:
     Detects strong trend alignment (EMA 20 > EMA 50) and enters on a clean
     pullback bounce / rejection candle touching EMA 20.
-    Enforces Top-Down 4H & 1H structural guardrails.
+    Enforces Top-Down 4H & 1H structural guardrails and configurable target_rr.
     """
     if len(df) < 55:
         return None
@@ -886,7 +903,7 @@ def ema_trend_pullback(df: pd.DataFrame, top_down_context: Optional[Dict[str, An
             # SL placed below EMA 50 or 1.5 * ATR
             sl = min(ema_50 - (0.3 * atr), entry - (1.5 * atr))
             if entry > sl:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "LONG",
@@ -909,7 +926,7 @@ def ema_trend_pullback(df: pd.DataFrame, top_down_context: Optional[Dict[str, An
             entry = float(curr["close"])
             sl = max(ema_50 + (0.3 * atr), entry + (1.5 * atr))
             if sl > entry:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "EMA_Trend_Pullback",
                     "side": "SHORT",
@@ -924,12 +941,16 @@ def ema_trend_pullback(df: pd.DataFrame, top_down_context: Optional[Dict[str, An
     return None
 
 
-def bb_volatility_breakout(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def bb_volatility_breakout(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     BB Volatility Breakout Strategy:
     Detects severe volatility compression (BB Width < 0.025 in recent bars)
     followed by an explosive expansion breakout candle with RVOL >= 1.4.
-    Enforces Top-Down 4H & 1H structural guardrails.
+    Enforces Top-Down 4H & 1H structural guardrails and configurable target_rr.
     """
     if len(df) < 30:
         return None
@@ -967,7 +988,7 @@ def bb_volatility_breakout(df: pd.DataFrame, top_down_context: Optional[Dict[str
 
         sl = max(bb_mid, entry - (1.5 * atr))
         if entry > sl:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "LONG",
@@ -987,7 +1008,7 @@ def bb_volatility_breakout(df: pd.DataFrame, top_down_context: Optional[Dict[str
 
         sl = min(bb_mid, entry + (1.5 * atr))
         if sl > entry:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "BB_Volatility_Breakout",
                 "side": "SHORT",
@@ -1002,12 +1023,16 @@ def bb_volatility_breakout(df: pd.DataFrame, top_down_context: Optional[Dict[str
     return None
 
 
-def rsi_divergence_reversal(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def rsi_divergence_reversal(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
     """
     RSI Divergence / Exhaustion Reversal Strategy:
     Detects extreme oversold (< 28) or overbought (> 72) conditions followed by
     a momentum reclaim and an engulfing reversal price action candle.
-    Enforces Top-Down 4H & 1H structural guardrails.
+    Enforces Top-Down 4H & 1H structural guardrails and configurable target_rr.
     """
     if len(df) < 30:
         return None
@@ -1043,7 +1068,7 @@ def rsi_divergence_reversal(df: pd.DataFrame, top_down_context: Optional[Dict[st
             entry = float(curr["close"])
             sl = min(float(curr["low"]), float(prev["low"])) - (0.5 * atr)
             if entry > sl:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "LONG",
@@ -1070,7 +1095,7 @@ def rsi_divergence_reversal(df: pd.DataFrame, top_down_context: Optional[Dict[st
             entry = float(curr["close"])
             sl = max(float(curr["high"]), float(prev["high"])) + (0.5 * atr)
             if sl > entry:
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "RSI_Divergence_Reversal",
                     "side": "SHORT",
@@ -1101,11 +1126,12 @@ def evaluate_enabled_strategies(
     ind_df: Optional[pd.DataFrame] = None,
     df_1h: Optional[pd.DataFrame] = None,
     df_4h: Optional[pd.DataFrame] = None,
-    top_down_context: Optional[Dict[str, Any]] = None
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
 ) -> List[Dict[str, Any]]:
     """
     Calculates technical indicators and runs all currently enabled strategies.
-    Supports full Top-Down Multi-Timeframe Price Action (4H -> 1H -> 15m).
+    Supports full Top-Down Multi-Timeframe Price Action (4H -> 1H -> 15m) and dynamic target_rr.
     Returns candidate setup dictionaries matching the unified schema.
     Supports case-insensitive & underscore-resilient strategy name matching.
     """
@@ -1133,11 +1159,14 @@ def evaluate_enabled_strategies(
         if key in normalized_registry:
             actual_name, handler = normalized_registry[key]
             try:
-                # Invoke with top_down_context keyword if supported
+                # Invoke with top_down_context and target_rr keywords if supported
                 try:
-                    candidate = handler(ind_df, top_down_context=top_down_context)
+                    candidate = handler(ind_df, top_down_context=top_down_context, target_rr=target_rr)
                 except TypeError:
-                    candidate = handler(ind_df)
+                    try:
+                        candidate = handler(ind_df, top_down_context=top_down_context)
+                    except TypeError:
+                        candidate = handler(ind_df)
 
                 if candidate:
                     candidate_setups.append(candidate)

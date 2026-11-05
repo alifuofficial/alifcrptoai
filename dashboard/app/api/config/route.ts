@@ -55,6 +55,9 @@ export async function GET() {
       if (!existing.forex_max_spread_pips || Number(existing.forex_max_spread_pips) <= 1.5) {
         existing.forex_max_spread_pips = 3.5;
       }
+      if (!existing.target_rr || Number(existing.target_rr) < 1.5) {
+        existing.target_rr = 2.5;
+      }
       return NextResponse.json({
         success: true,
         data: sanitizeConfig(existing),
@@ -79,6 +82,7 @@ export async function GET() {
       ],
       timeframe: "15m",
       risk_pct: 0.01,
+      target_rr: 2.5,
       min_score: 75,
       min_rvol: 1.2,
       enable_breakeven_partial: true,
@@ -169,6 +173,10 @@ export async function POST(req: Request) {
       if (typeof payload[key] === "string" && (payload[key].includes("••••") || payload[key].includes("****"))) {
         delete payload[key];
       }
+    }
+
+    if (payload.target_rr !== undefined) {
+      payload.target_rr = Math.max(1.5, Math.min(10.0, Number(payload.target_rr) || 2.5));
     }
 
     // Use UPSERT so it will insert row 1 if missing, or update if existing!

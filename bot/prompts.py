@@ -18,7 +18,7 @@ Immediately set "veto_triggered": true and assign "veto_reason" if any of the fo
 1. "macro_blackout": USD or currency-specific high-impact economic release (CPI, FOMC, NFP, Powell speech, ECB/BoE rate decision) scheduled within 30 minutes before or 15 minutes after.
 2. "opposing_hard_catalyst": Breaking news, exploits, exchange insolvencies, or regulatory crackdowns directly opposing the trade direction.
 3. "crowded_funding_rate": Perpetual 8h funding rate is heavily biased against the trade (> 0.05% for Long or < -0.05% for Short) indicating extreme crowded positioning.
-4. "insufficient_rr": Reward-to-Risk ratio calculated from Entry to Stop Loss and Take Profit is strictly below 2.0.
+4. "insufficient_rr": Reward-to-Risk ratio calculated from Entry to Stop Loss and Take Profit is strictly below configured target R:R (or strictly below 1.5).
 5. "spread_or_session_fault": Trading during known low-liquidity rollover or illiquid broker spreads exceeding configured threshold (> 3.5 pips).
 
 STAGE 2: DISCRETE SCORING RUBRIC (MANDATORY CHAIN-OF-THOUGHT)

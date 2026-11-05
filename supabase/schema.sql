@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     ],
     timeframe TEXT NOT NULL DEFAULT '15m',
     risk_pct NUMERIC NOT NULL DEFAULT 0.01 CHECK (risk_pct BETWEEN 0.0025 AND 0.02),
+    target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5 CHECK (target_rr BETWEEN 1.5 AND 10.0),
     min_score INT NOT NULL DEFAULT 70 CHECK (min_score BETWEEN 50 AND 95),
     min_rvol NUMERIC NOT NULL DEFAULT 1.2 CHECK (min_rvol BETWEEN 0.8 AND 2.5),
     enable_breakeven_partial BOOLEAN NOT NULL DEFAULT true,
@@ -414,6 +415,7 @@ BEGIN
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'deepseek';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_api_key_override TEXT DEFAULT NULL;
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5;
     ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
     ALTER TABLE trade_autopsies ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
 

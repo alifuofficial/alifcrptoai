@@ -92,6 +92,7 @@ interface BotConfig {
   active_strategies: string[];
   timeframe: string;
   risk_pct: number;
+  target_rr?: number;
   min_score: number;
   min_rvol: number;
   enable_breakeven_partial: boolean;
@@ -975,6 +976,7 @@ export default function CommandCenterPage() {
     try {
       const updates = {
         risk_pct: Number(formSettings.risk_pct),
+        target_rr: Number(formSettings.target_rr ?? 2.5),
         min_score: Number(formSettings.min_score),
         min_rvol: Number(formSettings.min_rvol),
         max_directional_exposure_pct: Number(formSettings.max_directional_exposure_pct),
@@ -3675,6 +3677,80 @@ export default function CommandCenterPage() {
                   <Shield className="h-4 w-4" />
                   <span>Quantitative Risk Guardrails</span>
                 </h3>
+
+                {/* Target Reward-to-Risk (RRR) Card */}
+                <div className="p-4 bg-brand-50/50 rounded-xl border border-brand-200/60">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-800">
+                          Target Reward-to-Risk Ratio (RRR)
+                        </label>
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-brand-600 text-white shadow-xs">
+                          1 : {Number(formSettings.target_rr ?? 2.5).toFixed(1)} R
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-textMuted mt-0.5">
+                        Dynamically derives Take Profit targets from Stop Loss distance across all 6 strategies and AI gates.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[
+                        { label: "1:2.0 Scalp", val: 2.0 },
+                        { label: "1:2.5 Standard", val: 2.5 },
+                        { label: "1:3.0 Runner", val: 3.0 },
+                        { label: "1:4.0 Expansion", val: 4.0 },
+                        { label: "1:5.0 Macro", val: 5.0 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.val}
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, target_rr: preset.val })}
+                          className={`px-2.5 py-1 text-xs rounded-md font-semibold border transition-all cursor-pointer ${
+                            Number(formSettings.target_rr ?? 2.5) === preset.val
+                              ? "bg-brand-600 text-white border-brand-700 shadow-xs"
+                              : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min="1.5"
+                      max="6.0"
+                      step="0.1"
+                      value={formSettings.target_rr ?? 2.5}
+                      onChange={(e) => setFormSettings({ ...formSettings, target_rr: parseFloat(e.target.value) })}
+                      className="w-full accent-brand-600 cursor-pointer h-2 bg-slate-200 rounded-lg"
+                    />
+                    <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-md border border-slate-200 shrink-0">
+                      <span className="text-xs font-medium text-slate-500">1:</span>
+                      <input
+                        type="number"
+                        min="1.5"
+                        max="10.0"
+                        step="0.1"
+                        value={formSettings.target_rr ?? 2.5}
+                        onChange={(e) =>
+                          setFormSettings({
+                            ...formSettings,
+                            target_rr: Math.max(1.5, Math.min(10.0, parseFloat(e.target.value) || 2.5)),
+                          })
+                        }
+                        className="w-12 text-xs font-bold text-slate-800 text-center focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-textMuted mt-1.5">
+                    <span>1:1.5 (High Frequency Scalp)</span>
+                    <span>1:2.5 (Institutional Optimal)</span>
+                    <span>1:6.0+ (Outlier Trend)</span>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div>

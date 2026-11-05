@@ -1503,14 +1503,18 @@ def scan_and_execute_signals(
             # Fetch news headlines
             headlines = fetch_crypto_headlines(symbol) if not is_fx else []
 
-            # Evaluate strategies with full Top-Down 4H -> 1H -> 15m Price Action
+            # Dynamic Target Reward-to-Risk Ratio from Admin Settings (e.g. 1:2.5, 1:3.0, 1:5.0)
+            target_rr = float(cfg.get("target_rr", 2.5) or 2.5)
+
+            # Evaluate strategies with full Top-Down 4H -> 1H -> 15m Price Action and dynamic RRR
             candidate_setups = evaluate_enabled_strategies(
                 df,
                 active_strats,
                 ind_df=ind_df,
                 df_1h=df_1h,
                 df_4h=df_4h,
-                top_down_context=top_down_context
+                top_down_context=top_down_context,
+                target_rr=target_rr
             )
             if not candidate_setups:
                 if _SCAN_HEARTBEAT_COUNT % 4 == 0:
@@ -1582,6 +1586,7 @@ def scan_and_execute_signals(
                     "stop_loss": setup["sl"],
                     "take_profit": setup["tp"],
                     "reward_risk_ratio": setup["rr"],
+                    "configured_target_rr": target_rr,
                     "setup_notes": setup["setup_notes"],
                     "relative_volume_rvol": rvol,
                     "funding_rate_pct": funding_rate,
