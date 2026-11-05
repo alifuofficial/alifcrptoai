@@ -48,9 +48,9 @@ export async function GET() {
     if (existing) {
       if (
         !existing.gemini_model ||
-        ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"].includes(existing.gemini_model)
+        ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"].includes(existing.gemini_model)
       ) {
-        existing.gemini_model = "gemini-3.1-flash-lite";
+        existing.gemini_model = "gemini-3.5-flash";
       }
       if (!existing.forex_max_spread_pips || Number(existing.forex_max_spread_pips) <= 1.5) {
         existing.forex_max_spread_pips = 3.5;
@@ -79,6 +79,8 @@ export async function GET() {
         "EMA_Trend_Pullback",
         "BB_Volatility_Breakout",
         "RSI_Divergence_Reversal",
+        "Asian_Judas_Swing",
+        "SMT_Divergence",
       ],
       timeframe: "15m",
       risk_pct: 0.01,

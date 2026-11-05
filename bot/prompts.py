@@ -31,7 +31,7 @@ The score for each rubric item must ONLY be one of the strictly allowed integer 
    - 0: Counter-trend against prevailing 4H impulse, or chasing Long into 1H Premium (> 55%) / Short into 1H Discount (< 45%).
 
 2. "ltf_location" (Allowed integers: 0, 12, 25):
-   - 25: Pristine strategy trigger: verified liquidity sweep of recent 15m fractal swing high/low or Equal Highs/Lows (EQH/EQL) during prime session (London/NY Killzones for Forex, clean displacement for Crypto), followed by immediate Fair Value Gap (FVG) reclaim/reaction.
+   - 25: Pristine strategy trigger: verified liquidity sweep of recent 15m fractal swing high/low, Equal Highs/Lows (EQH/EQL), London Judas Sweep of Asian Box (00:00-07:00 UTC), or Previous Day High/Low (PDH/PDL), followed by immediate Fair Value Gap (FVG) reclaim/displacement.
    - 12: Acceptable trigger location, but clean sweep was shallow or FVG is partially mitigated.
    - 0: Chasing middle of the range, entering late into extended candles without sweep or displacement.
 
@@ -46,9 +46,9 @@ The score for each rubric item must ONLY be one of the strictly allowed integer 
    - 0: Stale rumors, active regulatory scrutiny, or opposing sector sentiment.
 
 5. "intermarket_tide" (Allowed integers: 0, 7, 15):
-   - 15: Benchmark momentum aligns strongly with trade direction (BTC for Crypto, DXY inverse/session alignment for Forex); funding rate/spread is favorable.
+   - 15: Benchmark momentum or verified Cross-Pair SMT Divergence (e.g. EUR/USD vs GBP/USD, XAU/USD vs XAG/USD, BTC vs ETH) aligns strongly with trade direction; funding rate/spread is favorable.
    - 7: Benchmark is sideways with low correlation beta; funding rate/spread is benign.
-   - 0: Benchmark is exhibiting divergence against trade direction, or perpetual funding/spread is elevated against trade.
+   - 0: Benchmark or correlated pair is exhibiting opposing divergence against trade direction, or perpetual funding/spread is elevated against trade.
 
 SCORING SYNTHESIS:
 - total_score = sum(htf_regime + ltf_location + momentum_volume + news_catalyst + intermarket_tide) (Range: 0 to 100).

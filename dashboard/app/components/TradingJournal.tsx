@@ -88,6 +88,8 @@ const ALL_STRATEGIES = [
   "EMA_Trend_Pullback",
   "BB_Volatility_Breakout",
   "RSI_Divergence_Reversal",
+  "Asian_Judas_Swing",
+  "SMT_Divergence",
 ];
 
 const EMOTION_GRADES = [

@@ -109,6 +109,26 @@ def notify_breakeven_partial(cfg: Dict[str, Any], trade: Dict[str, Any], current
     send_telegram_alert(cfg, f"BREAK-EVEN & PARTIAL PROFIT LOCKED: {symbol}", msg, level="BREAKEVEN")
 
 
+def notify_scaled_exit(
+    cfg: Dict[str, Any],
+    trade: Dict[str, Any],
+    step_name: str,
+    current_price: float,
+    notes: str
+) -> None:
+    """Dispatches notification when an institutional Banker's Scaled Target or Trailing Stop triggers."""
+    symbol = trade.get("symbol")
+    side = trade.get("side")
+    msg = (
+        f"<b>Asset:</b> <code>{symbol}</code> ({side})\n"
+        f"<b>Milestone:</b> <b>{step_name}</b>\n"
+        f"<b>Current Price:</b> <code>{current_price}</code>\n"
+        f"<b>Execution Detail:</b> {notes}\n"
+        f"<b>Status:</b> <b>INSTITUTIONAL PROFIT SECURED</b>"
+    )
+    send_telegram_alert(cfg, f"BANKER'S SCALE EXIT: {symbol} ({step_name})", msg, level="BREAKEVEN")
+
+
 def notify_trade_closed(cfg: Dict[str, Any], trade: Dict[str, Any], autopsy: Optional[Dict[str, Any]] = None) -> None:
     """Dispatches trade closure notification, appending forensic autopsy if loss."""
     symbol = trade.get("symbol")

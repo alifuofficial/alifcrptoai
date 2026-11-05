@@ -27,6 +27,17 @@ except ImportError:
     except ImportError:
         ta = None
 
+try:
+    from forex_guard import calc_asian_range_benchmarks, calc_daily_benchmarks, detect_cross_pair_smt, is_forex_symbol
+except ImportError:
+    try:
+        from bot.forex_guard import calc_asian_range_benchmarks, calc_daily_benchmarks, detect_cross_pair_smt, is_forex_symbol
+    except ImportError:
+        calc_asian_range_benchmarks = None
+        calc_daily_benchmarks = None
+        detect_cross_pair_smt = None
+        is_forex_symbol = lambda s: False
+
 
 def get_price_decimals(price: float) -> int:
     """Returns dynamic decimal places depending on asset price tier."""
@@ -280,13 +291,17 @@ def detect_liquidity_pools(df_15m: pd.DataFrame, tolerance_pct: float = 0.0015) 
 def calc_top_down_structure(
     df_15m: pd.DataFrame,
     df_1h: Optional[pd.DataFrame] = None,
-    df_4h: Optional[pd.DataFrame] = None
+    df_4h: Optional[pd.DataFrame] = None,
+    symbol: str = "BTC/USDT",
+    correlated_df: Optional[pd.DataFrame] = None
 ) -> Dict[str, Any]:
     """
     Computes institutional Top-Down Market Structure across 4H, 1H, and 15m:
     1. 4H Macro Trend & Structure (Higher Highs/Higher Lows vs Lower Highs/Lower Lows, 4H EMA 50 alignment).
     2. 1H Intermediate Dealing Range [Range Low, Range High], Equilibrium (50%), and Premium vs. Discount zone.
     3. 15m Local Liquidity Pools (EQH, EQL, Fractal Pivots).
+    4. Institutional Horizontal Benchmarks: Previous Day High/Low (PDH/PDL), Asian Box (00:00-07:00 UTC).
+    5. Cross-Pair Smart Money Technique (SMT) Divergence triangulation.
     """
     latest_price = float(df_15m["close"].iloc[-1])
 
@@ -368,7 +383,31 @@ def calc_top_down_structure(
     # --- 3. 15m Local Liquidity Pools ---
     pools_15m = detect_liquidity_pools(df_15m)
 
+    # --- 4. Institutional Horizontal Daily & Asian Benchmarks ---
+    daily_benchmarks = {}
+    if calc_daily_benchmarks:
+        try:
+            daily_benchmarks = calc_daily_benchmarks(df_15m, df_1h=df_1h, symbol=symbol)
+        except Exception:
+            daily_benchmarks = {"has_benchmarks": False}
+
+    asian_range = {}
+    if calc_asian_range_benchmarks:
+        try:
+            asian_range = calc_asian_range_benchmarks(df_15m, symbol=symbol)
+        except Exception:
+            asian_range = {"is_valid_range": False}
+
+    # --- 5. Cross-Pair SMT Divergence ---
+    smt_info = {"smt_type": "NONE"}
+    if detect_cross_pair_smt and correlated_df is not None:
+        try:
+            smt_info = detect_cross_pair_smt(df_15m, correlated_df)
+        except Exception:
+            smt_info = {"smt_type": "NONE"}
+
     return {
+        "symbol": symbol,
         "htf_4h": {
             "bias": htf_4h_bias,
             "range_high": htf_4h_high,
@@ -385,6 +424,9 @@ def calc_top_down_structure(
             "is_ote": is_ote
         },
         "ltf_15m": pools_15m,
+        "daily_benchmarks": daily_benchmarks,
+        "asian_range": asian_range,
+        "smt_divergence": smt_info,
         "latest_price": latest_price
     }
 
@@ -466,6 +508,9 @@ def smc_liquidity_sweep(
             if entry > sl:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
                 ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
+                daily_bench = top_down_context.get("daily_benchmarks", {}) if top_down_context else {}
+                pdl = daily_bench.get("pdl") if daily_bench.get("has_benchmarks") else None
+                pdl_tag = " [PDL Bank Liquidity Sweep]" if (pdl and swept_low <= pdl and curr["close"] > pdl) else ""
                 pool_desc = "Equal Lows (EQL)" if eql_pools and sweep_target_low == eql_pools[-1]["price"] else "15m Fractal Low"
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
@@ -473,7 +518,7 @@ def smc_liquidity_sweep(
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_low)}) + Bullish FVG reclaim. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_low)}) + Bullish FVG reclaim{pdl_tag}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -498,6 +543,9 @@ def smc_liquidity_sweep(
             if sl > entry:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
                 ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
+                daily_bench = top_down_context.get("daily_benchmarks", {}) if top_down_context else {}
+                pdh = daily_bench.get("pdh") if daily_bench.get("has_benchmarks") else None
+                pdh_tag = " [PDH Bank Liquidity Sweep]" if (pdh and swept_high >= pdh and curr["close"] < pdh) else ""
                 pool_desc = "Equal Highs (EQH)" if eqh_pools and sweep_target_high == eqh_pools[-1]["price"] else "15m Fractal High"
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
@@ -505,7 +553,7 @@ def smc_liquidity_sweep(
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_high)}) + Bearish FVG reclaim. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_high)}) + Bearish FVG reclaim{pdh_tag}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -1110,6 +1158,183 @@ def rsi_divergence_reversal(
     return None
 
 
+def strat_asian_judas_swing(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
+    """
+    Asian Range Judas Swing Strategy (Institutional Forex & Gold):
+    1. Asian Box: 00:00 - 07:00 UTC accumulation range [Asian_Low, Asian_High].
+    2. Manipulation Window: Typically triggers during London Open (07:00 - 11:00 UTC) or NY open.
+    3. Fakeout & Displacement:
+       - LONG: Price purges below Asian_Low to trigger retail sell stops, then prints a strong 15m
+         bullish displacement reclaim candle back inside the Asian range with an FVG.
+       - SHORT: Price purges above Asian_High to trigger retail buy stops, then prints a strong 15m
+         bearish displacement reclaim candle back inside the Asian range with an FVG.
+    4. Target: Interbank target is the opposite Asian extreme or configured target_rr.
+    """
+    if len(df) < 30:
+        return None
+
+    # Retrieve Asian benchmarks from top_down_context or calculate on the fly
+    asian_info = {}
+    if top_down_context and "asian_range" in top_down_context:
+        asian_info = top_down_context["asian_range"]
+    elif calc_asian_range_benchmarks:
+        asian_info = calc_asian_range_benchmarks(df)
+
+    if not asian_info or not asian_info.get("is_valid_range"):
+        return None
+
+    asian_high = float(asian_info["asian_high"])
+    asian_low = float(asian_info["asian_low"])
+    range_pips = asian_info.get("asian_range_pips", 0.0)
+
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+
+    atr = float(curr["atr_14"]) if pd.notnull(curr["atr_14"]) else float(curr["close"] * 0.01)
+    rvol = float(curr["rvol_20"]) if pd.notnull(curr["rvol_20"]) else 1.0
+
+    htf_bias = "NEUTRAL"
+    itf_zone = "EQUILIBRIUM"
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_zone = itf.get("zone", "EQUILIBRIUM")
+
+    # LONG: Asian Low Judas Sweep + Reclaim
+    swept_low = min(float(prev["low"]), float(curr["low"]))
+    if swept_low < asian_low and float(curr["close"]) > asian_low:
+        if float(curr["close"]) > float(curr["open"]):
+            if htf_bias == "BEARISH" and itf_zone == "PREMIUM":
+                return None
+            has_displacement = (float(curr["low"]) > float(prev2["high"])) or ((float(curr["close"]) - float(curr["open"])) > 0.5 * (float(curr["high"]) - float(curr["low"])))
+            if has_displacement:
+                entry = float(curr["close"])
+                sl = swept_low - (0.5 * atr)
+                if entry > sl:
+                    entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
+                    return {
+                        "strategy_name": "Asian_Judas_Swing",
+                        "side": "LONG",
+                        "entry": entry_r,
+                        "sl": sl_r,
+                        "tp": tp_r,
+                        "setup_notes": f"London Judas Sweep of Asian Low (${format_price_dynamic(asian_low)}) + Bullish Reclaim. Asian Box: {range_pips} pips. 4H: {htf_bias} | 1H: {itf_zone}. RVOL: {rvol:.2f}x",
+                        "rvol": round(rvol, 2),
+                        "rr": rr
+                    }
+
+    # SHORT: Asian High Judas Sweep + Reclaim
+    swept_high = max(float(prev["high"]), float(curr["high"]))
+    if swept_high > asian_high and float(curr["close"]) < asian_high:
+        if float(curr["close"]) < float(curr["open"]):
+            if htf_bias == "BULLISH" and itf_zone == "DISCOUNT":
+                return None
+            has_displacement = (float(curr["high"]) < float(prev2["low"])) or ((float(curr["open"]) - float(curr["close"])) > 0.5 * (float(curr["high"]) - float(curr["low"])))
+            if has_displacement:
+                entry = float(curr["close"])
+                sl = swept_high + (0.5 * atr)
+                if sl > entry:
+                    entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
+                    return {
+                        "strategy_name": "Asian_Judas_Swing",
+                        "side": "SHORT",
+                        "entry": entry_r,
+                        "sl": sl_r,
+                        "tp": tp_r,
+                        "setup_notes": f"London Judas Sweep of Asian High (${format_price_dynamic(asian_high)}) + Bearish Reclaim. Asian Box: {range_pips} pips. 4H: {htf_bias} | 1H: {itf_zone}. RVOL: {rvol:.2f}x",
+                        "rvol": round(rvol, 2),
+                        "rr": rr
+                    }
+
+    return None
+
+
+def strat_smt_divergence(
+    df: pd.DataFrame,
+    top_down_context: Optional[Dict[str, Any]] = None,
+    target_rr: float = 2.5
+) -> Optional[Dict[str, Any]]:
+    """
+    Smart Money Technique (SMT) Divergence Strategy (Intermarket Accumulation/Distribution):
+    Triggers when institutional divergence between correlated assets is detected:
+    - EUR/USD vs GBP/USD
+    - XAU/USD vs XAG/USD
+    - BTC/USDT vs ETH/USDT
+    Enforces 15m displacement candle and FVG confirmation.
+    """
+    if len(df) < 30 or not top_down_context:
+        return None
+
+    smt_info = top_down_context.get("smt_divergence", {})
+    smt_type = smt_info.get("smt_type", "NONE")
+    if smt_type == "NONE":
+        return None
+
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    prev2 = df.iloc[-3]
+
+    atr = float(curr["atr_14"]) if pd.notnull(curr["atr_14"]) else float(curr["close"] * 0.01)
+    rvol = float(curr["rvol_20"]) if pd.notnull(curr["rvol_20"]) else 1.0
+
+    htf = top_down_context.get("htf_4h", {})
+    itf = top_down_context.get("itf_1h", {})
+    htf_bias = htf.get("bias", "NEUTRAL")
+    itf_zone = itf.get("zone", "EQUILIBRIUM")
+
+    # Bullish SMT Setup
+    if smt_type == "BULLISH_SMT":
+        if htf_bias == "BEARISH" and itf_zone == "PREMIUM":
+            return None
+        if float(curr["close"]) > float(curr["open"]):
+            has_fvg = (float(curr["low"]) > float(prev2["high"])) or ((float(curr["close"]) - float(curr["open"])) > 0.45 * (float(curr["high"]) - float(curr["low"])))
+            if has_fvg:
+                entry = float(curr["close"])
+                sl = min(float(curr["low"]), float(prev["low"])) - (0.5 * atr)
+                if entry > sl:
+                    entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
+                    return {
+                        "strategy_name": "SMT_Divergence",
+                        "side": "LONG",
+                        "entry": entry_r,
+                        "sl": sl_r,
+                        "tp": tp_r,
+                        "setup_notes": f"Bullish SMT Divergence across correlated pair + Bullish FVG displacement. 4H: {htf_bias} | 1H: {itf_zone}. RVOL: {rvol:.2f}x",
+                        "rvol": round(rvol, 2),
+                        "rr": rr
+                    }
+
+    # Bearish SMT Setup
+    elif smt_type == "BEARISH_SMT":
+        if htf_bias == "BULLISH" and itf_zone == "DISCOUNT":
+            return None
+        if float(curr["close"]) < float(curr["open"]):
+            has_fvg = (float(curr["high"]) < float(prev2["low"])) or ((float(curr["open"]) - float(curr["close"])) > 0.45 * (float(curr["high"]) - float(curr["low"])))
+            if has_fvg:
+                entry = float(curr["close"])
+                sl = max(float(curr["high"]), float(prev["high"])) + (0.5 * atr)
+                if sl > entry:
+                    entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
+                    return {
+                        "strategy_name": "SMT_Divergence",
+                        "side": "SHORT",
+                        "entry": entry_r,
+                        "sl": sl_r,
+                        "tp": tp_r,
+                        "setup_notes": f"Bearish SMT Divergence across correlated pair + Bearish FVG displacement. 4H: {htf_bias} | 1H: {itf_zone}. RVOL: {rvol:.2f}x",
+                        "rvol": round(rvol, 2),
+                        "rr": rr
+                    }
+
+    return None
+
+
 STRATEGY_REGISTRY = {
     "SMC_Liquidity_Sweep": smc_liquidity_sweep,
     "ICT_OrderBlock_FVG": strat_ict_orderblock_fvg,
@@ -1117,6 +1342,8 @@ STRATEGY_REGISTRY = {
     "EMA_Trend_Pullback": ema_trend_pullback,
     "BB_Volatility_Breakout": bb_volatility_breakout,
     "RSI_Divergence_Reversal": rsi_divergence_reversal,
+    "Asian_Judas_Swing": strat_asian_judas_swing,
+    "SMT_Divergence": strat_smt_divergence,
 }
 
 

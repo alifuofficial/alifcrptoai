@@ -80,6 +80,7 @@ from notifier import (
     send_telegram_alert,
     notify_trade_opened,
     notify_breakeven_partial,
+    notify_scaled_exit,
     notify_trade_closed,
     notify_strategy_quarantined,
     notify_panic_activated
@@ -103,6 +104,16 @@ def get_supabase_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
+# Institutional Correlated Pairs for SMT Divergence Triangulation
+CORRELATED_PAIR_MAP = {
+    "EUR/USD": "GBP/USD",
+    "GBP/USD": "EUR/USD",
+    "XAU/USD": "XAG/USD",
+    "XAG/USD": "XAU/USD",
+    "BTC/USDT": "ETH/USDT",
+    "ETH/USDT": "BTC/USDT",
+}
+
 # Cached exchange clients to preserve pre-loaded markets across loops
 _EXCHANGE_CLIENT: Optional[ccxt.binanceusdm] = None
 _EXCHANGE_CONFIG_SIG: Optional[str] = None
@@ -111,6 +122,8 @@ _BYBIT_CONFIG_SIG: Optional[str] = None
 
 # In-memory TTL cache for 1H and 4H OHLCV candles to prevent CCXT exchange rate limiting
 _HTF_CANDLE_CACHE: Dict[str, Dict[str, Any]] = {}
+# In-memory cache for 15m OHLCV DataFrames for cross-pair SMT evaluation
+_LTF_15M_CACHE: Dict[str, pd.DataFrame] = {}
 
 
 def get_cached_ohlcv(exchange: Any, ex_sym: str, timeframe: str, limit: int = 60, ttl_sec: int = 600) -> Optional[List[Any]]:
@@ -382,10 +395,10 @@ def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
     """
     if provider == "gemini":
         gemini_key = cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY", "")
-        gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+        gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
         # Auto-upgrade deprecated / retired model identifiers
-        if gemini_model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
-            gemini_model = "gemini-3.1-flash-lite"
+        if gemini_model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"]:
+            gemini_model = "gemini-3.5-flash"
         client = OpenAI(
             api_key=gemini_key or "dummy-gemini-key",
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -440,10 +453,10 @@ def execute_ai_completion(
             )
             return (resp.choices[0].message.content or "{}"), model
         except Exception as e:
-            if ("404" in str(e) or "not found" in str(e).lower() or "no longer available" in str(e).lower()) and model != "gemini-3.1-flash-lite":
-                print(f"[ai_router] Gemini model '{model}' unavailable ({e}). Retrying with 'gemini-3.1-flash-lite'...")
+            if ("404" in str(e) or "not found" in str(e).lower() or "no longer available" in str(e).lower()) and model != "gemini-3.5-flash":
+                print(f"[ai_router] Gemini model '{model}' unavailable ({e}). Retrying with 'gemini-3.5-flash'...")
                 resp = client.chat.completions.create(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
@@ -451,7 +464,7 @@ def execute_ai_completion(
                     temperature=0.1,
                     max_tokens=max_tokens
                 )
-                return (resp.choices[0].message.content or "{}"), "gemini-3.1-flash-lite"
+                return (resp.choices[0].message.content or "{}"), "gemini-3.5-flash"
             raise e
 
     elif provider == "auto":
@@ -483,10 +496,10 @@ def execute_ai_completion(
                 )
                 return (resp.choices[0].message.content or "{}"), gemini_model
             except Exception as gem_err:
-                if ("404" in str(gem_err) or "not found" in str(gem_err).lower() or "no longer available" in str(gem_err).lower()) and gemini_model != "gemini-3.1-flash-lite":
-                    print(f"[ai_router] Gemini fallback model '{gemini_model}' retired. Retrying with 'gemini-3.1-flash-lite'...")
+                if ("404" in str(gem_err) or "not found" in str(gem_err).lower() or "no longer available" in str(gem_err).lower()) and gemini_model != "gemini-3.5-flash":
+                    print(f"[ai_router] Gemini fallback model '{gemini_model}' retired. Retrying with 'gemini-3.5-flash'...")
                     resp = gemini_client.chat.completions.create(
-                        model="gemini-3.1-flash-lite",
+                        model="gemini-3.5-flash",
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt}
@@ -494,7 +507,7 @@ def execute_ai_completion(
                         temperature=0.1,
                         max_tokens=max_tokens
                     )
-                    return (resp.choices[0].message.content or "{}"), "gemini-3.1-flash-lite"
+                    return (resp.choices[0].message.content or "{}"), "gemini-3.5-flash"
                 raise gem_err
 
     else:
@@ -554,7 +567,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "deepseek_base_url": "https://api.deepseek.com",
         "ai_provider": "deepseek",
         "gemini_api_key_override": None,
-        "gemini_model": "gemini-3.1-flash-lite",
+        "gemini_model": "gemini-3.5-flash",
         "exchange_mode": "binance",
         "bybit_api_key_override": None,
         "bybit_secret_override": None,
@@ -1053,20 +1066,29 @@ def manage_open_positions(
             new_mfe = max(float(t.get("mfe_r", 0.0) or 0.0), curr_r)
             new_mae = min(float(t.get("mae_r", 0.0) or 0.0), curr_r)
 
-            # --- +0.8R BREAK-EVEN & 50% PARTIAL PROFIT LOCK ---
-            be_threshold = float(cfg.get("breakeven_trigger_r", 0.8))
+            # --- BANKER'S SCALED EXITS (1.5R BE -> 3.0R PARTIAL -> 15M FRACTAL TRAIL) ---
+            initial_qty = float(t.get("initial_qty") or qty)
+            be_threshold = float(cfg.get("breakeven_trigger_r", 1.5))
+            is_fx = is_forex_symbol(symbol)
+            pip_sz = get_forex_pip_size(symbol) if is_fx else 0.0001
+
+            # Step 1: Target 1 (+1.5R Milestone) -> Bank 40% Partial & Move SL to BE + Spread Buffer
             if (curr_r >= be_threshold and 
                 cfg.get("enable_breakeven_partial", True) and 
                 not breakeven_activated):
 
-                is_fx = is_forex_symbol(symbol)
-                partial_qty = round(qty * 0.5, 2 if is_fx else (4 if qty < 10.0 else 2))
+                partial_qty = round(qty * 0.40, 2 if is_fx else (4 if qty < 10.0 else 2))
                 new_remaining_qty = round(qty - partial_qty, 2 if is_fx else (4 if qty < 10.0 else 2))
-                be_sl_price = round_price_dynamic(entry * 1.0015) if side == "LONG" else round_price_dynamic(entry * 0.9985)
+                
+                if is_fx:
+                    be_sl_price = round_price_dynamic(entry + 2.0 * pip_sz) if side == "LONG" else round_price_dynamic(entry - 2.0 * pip_sz)
+                else:
+                    be_sl_price = round_price_dynamic(entry * 1.0015) if side == "LONG" else round_price_dynamic(entry * 0.9985)
+                
                 new_sl_id = f"sim_be_sl_{int(time.time())}" if is_sim else None
 
                 if not is_sim:
-                    print(f"[trade_mgmt] +{be_threshold}R reached for {symbol} trade #{trade_id} ({trade_exchange}). Executing 50% partial TP and moving SL to BE!")
+                    print(f"[trade_mgmt] 🏛️ Banker's Step 1: +{be_threshold}R reached for {symbol} trade #{trade_id} ({trade_exchange}). Banking 40% partial TP and moving SL to BE+Spread ({be_sl_price})!")
                     close_side = "sell" if side == "LONG" else "buy"
                     try:
                         exchange.create_market_order(
@@ -1102,7 +1124,7 @@ def manage_open_positions(
                     except Exception as e:
                         print(f"[trade_mgmt] Place BE SL warning: {e}")
                 else:
-                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +{be_threshold}R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${format_price_dynamic(be_sl_price)}!")
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) 🏛️ Banker's Step 1: +{be_threshold}R reached for {symbol} trade #{trade_id}. Banking 40% partial profit lock & moving SL to BE+Spread at ${format_price_dynamic(be_sl_price)}!")
 
                 # Update database record
                 supabase.table("trade_executions").update({
@@ -1114,8 +1136,143 @@ def manage_open_positions(
                     "mae_r": round(new_mae, 2)
                 }).eq("id", trade_id).execute()
 
-                notify_breakeven_partial(cfg, t, current_price)
+                notify_scaled_exit(
+                    cfg, t, "Target 1 (+1.5R Milestone)", current_price,
+                    f"Banked 40% profit ({partial_qty} units). SL shifted to Risk-Free BE+Spread (${format_price_dynamic(be_sl_price)})."
+                )
                 continue
+
+            # Step 2: Target 2 (+3.0R Expansion) -> Bank 30% Partial & Lock SL to +1.5R Profit
+            if (curr_r >= 3.0 and 
+                breakeven_activated and 
+                qty > (initial_qty * 0.35)):
+
+                partial_qty2 = round(initial_qty * 0.30, 2 if is_fx else (4 if qty < 10.0 else 2))
+                runner_qty = round(qty - partial_qty2, 2 if is_fx else (4 if qty < 10.0 else 2))
+                lock_sl_price = round_price_dynamic(entry + 1.5 * risk_dist) if side == "LONG" else round_price_dynamic(entry - 1.5 * risk_dist)
+                new_sl_id2 = f"sim_lock_sl_{int(time.time())}" if is_sim else None
+
+                if not is_sim:
+                    print(f"[trade_mgmt] 🚀 Banker's Step 2: +3.0R Expansion reached for {symbol} trade #{trade_id}. Banking 30% partial and locking SL to +1.5R (${format_price_dynamic(lock_sl_price)})!")
+                    close_side = "sell" if side == "LONG" else "buy"
+                    try:
+                        exchange.create_market_order(ex_sym, close_side, partial_qty2, params={"reduceOnly": True})
+                    except Exception as e:
+                        print(f"[trade_mgmt] Step 2 partial order warning: {e}")
+
+                    old_sl_id = t.get("sl_order_id")
+                    if old_sl_id:
+                        try:
+                            exchange.cancel_order(old_sl_id, ex_sym)
+                        except Exception as e:
+                            print(f"[trade_mgmt] Cancel old SL warning: {e}")
+
+                    try:
+                        order_type = "STOP_MARKET" if trade_exchange == "binance" else "market"
+                        new_sl_order = exchange.create_order(
+                            symbol=ex_sym,
+                            type=order_type,
+                            side=close_side,
+                            amount=runner_qty,
+                            params={
+                                "stopPrice": lock_sl_price,
+                                "workingType": "MARK_PRICE",
+                                "reduceOnly": True
+                            }
+                        )
+                        new_sl_id2 = str(new_sl_order.get("id"))
+                    except Exception as e:
+                        print(f"[trade_mgmt] Place Lock SL warning: {e}")
+                else:
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) 🚀 Banker's Step 2: +3.0R reached for {symbol} trade #{trade_id}. Banking 30% profit & locking SL to +1.5R at ${format_price_dynamic(lock_sl_price)}!")
+
+                supabase.table("trade_executions").update({
+                    "qty": runner_qty,
+                    "stop_loss": lock_sl_price,
+                    "sl_order_id": new_sl_id2,
+                    "mfe_r": round(new_mfe, 2),
+                    "mae_r": round(new_mae, 2)
+                }).eq("id", trade_id).execute()
+
+                notify_scaled_exit(
+                    cfg, t, "Target 2 (+3.0R Expansion)", current_price,
+                    f"Banked additional 30% profit. Remaining 30% runner Stop Loss locked at +1.5R (${format_price_dynamic(lock_sl_price)})."
+                )
+                continue
+
+            # Step 3: Runner Trailing behind confirmed 15m Fractal Pivots
+            if (breakeven_activated and 
+                qty <= (initial_qty * 0.35) and 
+                curr_r >= 3.2):
+
+                cached_df = _LTF_15M_CACHE.get(symbol)
+                if cached_df is not None and len(cached_df) >= 20:
+                    try:
+                        pivots = detect_fractal_pivots(cached_df, window=2)
+                        if side == "LONG" and pivots.get("lows"):
+                            recent_low = float(pivots["lows"][-1]["price"])
+                            new_trail = round_price_dynamic(recent_low - 0.2 * risk_dist)
+                            if new_trail > sl:
+                                print(f"[trade_mgmt] 📈 Trailing runner SL for {symbol} LONG #{trade_id} up to 15m fractal pivot: ${format_price_dynamic(new_trail)}")
+                                if not is_sim:
+                                    old_sl_id = t.get("sl_order_id")
+                                    if old_sl_id:
+                                        try:
+                                            exchange.cancel_order(old_sl_id, ex_sym)
+                                        except Exception:
+                                            pass
+                                    close_side = "sell"
+                                    order_type = "STOP_MARKET" if trade_exchange == "binance" else "market"
+                                    new_sl_order = exchange.create_order(
+                                        symbol=ex_sym,
+                                        type=order_type,
+                                        side=close_side,
+                                        amount=qty,
+                                        params={"stopPrice": new_trail, "workingType": "MARK_PRICE", "reduceOnly": True}
+                                    )
+                                    new_sl_id_trail = str(new_sl_order.get("id"))
+                                else:
+                                    new_sl_id_trail = f"sim_trail_{int(time.time())}"
+
+                                supabase.table("trade_executions").update({
+                                    "stop_loss": new_trail,
+                                    "sl_order_id": new_sl_id_trail,
+                                    "mfe_r": round(new_mfe, 2),
+                                    "mae_r": round(new_mae, 2)
+                                }).eq("id", trade_id).execute()
+                        elif side == "SHORT" and pivots.get("highs"):
+                            recent_high = float(pivots["highs"][-1]["price"])
+                            new_trail = round_price_dynamic(recent_high + 0.2 * risk_dist)
+                            if new_trail < sl:
+                                print(f"[trade_mgmt] 📉 Trailing runner SL for {symbol} SHORT #{trade_id} down to 15m fractal pivot: ${format_price_dynamic(new_trail)}")
+                                if not is_sim:
+                                    old_sl_id = t.get("sl_order_id")
+                                    if old_sl_id:
+                                        try:
+                                            exchange.cancel_order(old_sl_id, ex_sym)
+                                        except Exception:
+                                            pass
+                                    close_side = "buy"
+                                    order_type = "STOP_MARKET" if trade_exchange == "binance" else "market"
+                                    new_sl_order = exchange.create_order(
+                                        symbol=ex_sym,
+                                        type=order_type,
+                                        side=close_side,
+                                        amount=qty,
+                                        params={"stopPrice": new_trail, "workingType": "MARK_PRICE", "reduceOnly": True}
+                                    )
+                                    new_sl_id_trail = str(new_sl_order.get("id"))
+                                else:
+                                    new_sl_id_trail = f"sim_trail_{int(time.time())}"
+
+                                supabase.table("trade_executions").update({
+                                    "stop_loss": new_trail,
+                                    "sl_order_id": new_sl_id_trail,
+                                    "mfe_r": round(new_mfe, 2),
+                                    "mae_r": round(new_mae, 2)
+                                }).eq("id", trade_id).execute()
+                    except Exception as trail_err:
+                        print(f"[trade_mgmt] Trailing runner error: {trail_err}")
 
             # --- ZOMBIE TRADE TIME-STOP ---
             bars_elapsed = 0
@@ -1456,6 +1613,9 @@ def scan_and_execute_signals(
             latest_price = float(df["close"].iloc[-1])
             ind_df = calc_indicators(df)
 
+            # Store in-memory 15m frame for cross-pair SMT and trailing stops
+            _LTF_15M_CACHE[symbol] = df
+
             # Fetch Multi-Timeframe 1H and 4H OHLCV with in-memory TTL caching (Top-Down Architecture)
             ohlcv_1h = get_cached_ohlcv(exchange, ex_sym, timeframe="1h", limit=70, ttl_sec=600)
             df_1h = None
@@ -1469,8 +1629,24 @@ def scan_and_execute_signals(
                 df_4h = pd.DataFrame(ohlcv_4h, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df_4h["timestamp"] = pd.to_datetime(df_4h["timestamp"], unit="ms")
 
+            # Resolve institutional correlated partner (EUR<->GBP, Gold<->Silver, BTC<->ETH)
+            corr_sym = CORRELATED_PAIR_MAP.get(symbol)
+            corr_df = None
+            if corr_sym:
+                corr_df = _LTF_15M_CACHE.get(corr_sym)
+                if corr_df is None:
+                    try:
+                        corr_ex_sym = resolve_exchange_symbol(exchange, corr_sym)
+                        corr_ohlcv = exchange.fetch_ohlcv(corr_ex_sym, timeframe="15m", limit=30)
+                        if corr_ohlcv and len(corr_ohlcv) >= 15:
+                            corr_df = pd.DataFrame(corr_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                            corr_df["timestamp"] = pd.to_datetime(corr_df["timestamp"], unit="ms")
+                            _LTF_15M_CACHE[corr_sym] = corr_df
+                    except Exception:
+                        corr_df = None
+
             # Calculate institutional Top-Down Market Structure across 4H, 1H, and 15m
-            top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h)
+            top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h, symbol=symbol, correlated_df=corr_df)
 
             # Check funding rate or spread
             funding_rate = 0.0
@@ -1576,6 +1752,10 @@ def scan_and_execute_signals(
                 session_info = get_forex_session_regime() if is_fx else None
 
                 # DeepSeek / Gemini Audit Prompt construction with Top-Down Telemetry
+                daily_b = top_down_context.get("daily_benchmarks", {})
+                asian_b = top_down_context.get("asian_range", {})
+                smt_b = top_down_context.get("smt_divergence", {})
+
                 audit_payload = {
                     "symbol": symbol,
                     "exchange": exchange_name,
@@ -1592,6 +1772,9 @@ def scan_and_execute_signals(
                     "funding_rate_pct": funding_rate,
                     "broker_spread_pips": spread_pips,
                     "forex_session_context": f"{session_info['session_name']} - {session_info['description']}" if session_info else "24/7 Continuous Crypto Market",
+                    "cross_pair_smt_divergence": smt_b.get("description", "None"),
+                    "asian_range_benchmarks": f"High: ${format_price_dynamic(asian_b['asian_high'])}, Low: ${format_price_dynamic(asian_b['asian_low'])}, Span: {asian_b.get('asian_range_pips', 0)} pips" if asian_b.get("is_valid_range") else "N/A",
+                    "previous_day_benchmarks": f"PDH: ${format_price_dynamic(daily_b['pdh'])}, PDL: ${format_price_dynamic(daily_b['pdl'])}, Range: {daily_b.get('daily_range_pips', 0)} pips" if daily_b.get("has_benchmarks") else "N/A",
                     "top_down_4h_bias": top_down_context["htf_4h"]["bias"],
                     "top_down_1h_zone": f"{top_down_context['itf_1h']['zone']} ({top_down_context['itf_1h']['range_depth_pct']}% of range, Equilibrium: ${format_price_dynamic(top_down_context['itf_1h']['equilibrium'])})",
                     "optimal_trade_entry_fib": "YES (61.8% - 78.6% Fib Retracement)" if top_down_context["itf_1h"]["is_ote"] else "NEUTRAL",

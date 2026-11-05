@@ -508,7 +508,7 @@ async function testDeepSeek(options?: DeepSeekTestOptions) {
 async function testGemini(options?: GeminiTestOptions) {
   const start = Date.now();
   let apiKey = options?.apiKey?.trim();
-  let model = options?.model?.trim() || "gemini-3.1-flash-lite";
+  let model = options?.model?.trim() || "gemini-3.5-flash";
 
   if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
 
@@ -518,9 +518,9 @@ async function testGemini(options?: GeminiTestOptions) {
     model === "gemini-2.5-flash" ||
     model === "gemini-1.5-flash" ||
     model === "gemini-2.0-flash" ||
-    model === "gemini-2.5-flash-lite"
+    model === "gemini-3.1-flash-lite"
   ) {
-    model = "gemini-3.1-flash-lite";
+    model = "gemini-3.5-flash";
   }
 
   if (!apiKey) {
@@ -528,7 +528,7 @@ async function testGemini(options?: GeminiTestOptions) {
       const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
       if (cfg) {
         apiKey = cfg.gemini_api_key_override || process.env.GEMINI_API_KEY;
-        if (cfg.gemini_model && !["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"].includes(cfg.gemini_model)) {
+        if (cfg.gemini_model && !["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-3.1-flash-lite"].includes(cfg.gemini_model)) {
           model = cfg.gemini_model;
         }
       }
@@ -575,12 +575,18 @@ async function testGemini(options?: GeminiTestOptions) {
     let latencyMs = Date.now() - start;
     let aiData = await aiRes.json();
 
-    // If 404 (model retired/deprecated for new API keys), auto-retry with gemini-3.1-flash-lite
-    if (!aiRes.ok && aiRes.status === 404 && model !== "gemini-3.1-flash-lite") {
-      model = "gemini-3.1-flash-lite";
-      aiRes = await runGeminiPing(model);
-      latencyMs = Date.now() - start;
-      aiData = await aiRes.json();
+    // If 404 or 503, auto-fallback cascade
+    if (!aiRes.ok && (aiRes.status === 404 || aiRes.status === 503)) {
+      const fallbackModels = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"];
+      for (const altModel of fallbackModels) {
+        if (altModel !== model) {
+          model = altModel;
+          aiRes = await runGeminiPing(model);
+          latencyMs = Date.now() - start;
+          aiData = await aiRes.json();
+          if (aiRes.ok) break;
+        }
+      }
     }
 
     if (!aiRes.ok) {

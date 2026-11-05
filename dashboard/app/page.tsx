@@ -252,6 +252,8 @@ const ALL_STRATEGIES: StrategyInfo[] = [
   { id: "EMA_Trend_Pullback", label: "EMA Trend Pullback", regime: "Trend Following" },
   { id: "BB_Volatility_Breakout", label: "BB Volatility Breakout", regime: "Volatility Compression" },
   { id: "RSI_Divergence_Reversal", label: "RSI Divergence Reversal", regime: "Mean Reversion" },
+  { id: "Asian_Judas_Swing", label: "Asian Range Judas Swing", regime: "London Open Manipulation" },
+  { id: "SMT_Divergence", label: "SMT Divergence (Cross-Pair)", regime: "Intermarket Accumulation" },
 ];
 
 type NavSection =
@@ -799,7 +801,7 @@ export default function CommandCenterPage() {
             },
             gemini: {
               apiKey: formSettings.gemini_api_key_override,
-              model: formSettings.gemini_model || "gemini-3.1-flash-lite",
+              model: formSettings.gemini_model || "gemini-3.5-flash",
             },
             telegram: {
               token: formSettings.telegram_token_override,
@@ -868,7 +870,7 @@ export default function CommandCenterPage() {
             },
             gemini: {
               apiKey: formSettings.gemini_api_key_override,
-              model: formSettings.gemini_model || "gemini-3.1-flash-lite",
+              model: formSettings.gemini_model || "gemini-3.5-flash",
             },
             telegram: {
               token: formSettings.telegram_token_override,
@@ -1002,7 +1004,7 @@ export default function CommandCenterPage() {
         forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.5),
         ai_provider: formSettings.ai_provider || "deepseek",
         gemini_api_key_override: formSettings.gemini_api_key_override?.trim() || null,
-        gemini_model: formSettings.gemini_model || "gemini-3.1-flash-lite",
+        gemini_model: formSettings.gemini_model || "gemini-3.5-flash",
         deepseek_key_override: formSettings.deepseek_key_override?.trim() || null,
         telegram_token_override: formSettings.telegram_token_override?.trim() || null,
         telegram_chat_id_override: formSettings.telegram_chat_id_override?.trim() || null,
@@ -4339,21 +4341,21 @@ export default function CommandCenterPage() {
                       <label className="block text-xs font-medium text-textMain mb-1">Gemini Model Identifier</label>
                       <input
                         type="text"
-                        value={formSettings.gemini_model || "gemini-3.1-flash-lite"}
+                        value={formSettings.gemini_model || "gemini-3.5-flash"}
                         onChange={(e) => setFormSettings({ ...formSettings, gemini_model: e.target.value })}
-                        placeholder="gemini-3.1-flash-lite"
+                        placeholder="gemini-3.5-flash"
                         className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                       />
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
                       {[
-                        { name: "Gemini 3.1 Flash Lite (Recommended Free)", model: "gemini-3.1-flash-lite" },
-                        { name: "Gemini 3.5 Flash Lite", model: "gemini-3.5-flash-lite" },
-                        { name: "Gemini 3.5 Flash", model: "gemini-3.5-flash" },
-                        { name: "Gemini Flash Lite Latest", model: "gemini-flash-lite-latest" },
+                        { name: "Gemini 3.5 Flash (Recommended)", model: "gemini-3.5-flash" },
+                        { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" },
+                        { name: "Gemini Flash Latest", model: "gemini-flash-latest" },
+                        { name: "Gemini 2.5 Flash Lite", model: "gemini-2.5-flash-lite" },
                       ].map((preset) => {
-                        const isSelected = (formSettings.gemini_model || "gemini-3.1-flash-lite") === preset.model;
+                        const isSelected = (formSettings.gemini_model || "gemini-3.5-flash") === preset.model;
                         return (
                           <button
                             key={preset.model}
