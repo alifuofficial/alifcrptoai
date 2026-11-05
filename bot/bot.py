@@ -245,7 +245,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "timeframe": "15m",
         "risk_pct": 0.01,
         "min_score": 70,
-        "min_rvol": 1.2,
+        "min_rvol": 1.0,
         "enable_breakeven_partial": True,
         "max_directional_exposure_pct": 0.015,
         "max_hold_bars": 20,
@@ -981,6 +981,7 @@ def scan_and_execute_signals(
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             latest_price = float(df["close"].iloc[-1])
+            ind_df = calc_indicators(df)
 
             # Check funding rate
             funding_rate = 0.0
@@ -998,7 +999,7 @@ def scan_and_execute_signals(
             headlines = fetch_crypto_headlines(symbol)
 
             # Evaluate strategies
-            candidate_setups = evaluate_enabled_strategies(df, active_strats)
+            candidate_setups = evaluate_enabled_strategies(df, active_strats, ind_df=ind_df)
             if not candidate_setups:
                 if _SCAN_HEARTBEAT_COUNT % 4 == 0:
                     print(f"[scanner] {symbol} (${latest_price:,.2f}) -> 15m OHLCV checked across {len(active_strats)} quant strategies. No valid trigger on current bar. Actively monitoring...")
@@ -1008,8 +1009,9 @@ def scan_and_execute_signals(
 
             for setup in candidate_setups:
                 rvol = setup.get("rvol", 1.0)
-                if rvol < cfg.get("min_rvol", 1.2):
-                    print(f"[scanner] {symbol} {setup.get('strategy_name')} candidate skipped: RVOL {rvol:.2f}x < required {cfg.get('min_rvol', 1.2)}x volume threshold.")
+                min_rvol_threshold = float(cfg.get("min_rvol", 1.0) or 1.0)
+                if rvol < min_rvol_threshold:
+                    print(f"[scanner] {symbol} {setup.get('strategy_name')} candidate skipped: RVOL {rvol:.2f}x < required {min_rvol_threshold:.2f}x volume threshold.")
                     continue
 
                 side = setup.get("side")

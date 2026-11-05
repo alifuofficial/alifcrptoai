@@ -88,7 +88,36 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3. RVOL 20 (Relative Volume: Current Volume / 20-period Volume SMA)
     vol_sma_20 = df["volume"].rolling(window=20).mean()
-    df["rvol_20"] = df["volume"] / (vol_sma_20 + 1e-9)
+    base_rvol = df["volume"] / (vol_sma_20 + 1e-9)
+
+    # Dynamic In-Progress Candle RVOL Projection:
+    # On 15m candles, the forming bar (iloc[-1]) has only accumulated a fraction of its volume.
+    # We project the full-bar volume based on elapsed seconds and also check the last settled bar (iloc[-2]).
+    if "timestamp" in df.columns and len(df) >= 2:
+        try:
+            curr_ts = pd.to_datetime(df["timestamp"].iloc[-1])
+            now_utc = pd.Timestamp.now(tz="UTC")
+            if curr_ts.tzinfo is None:
+                curr_ts = curr_ts.tz_localize("UTC")
+
+            elapsed_sec = max((now_utc - curr_ts).total_seconds(), 10.0)
+            # 15m candle bar has 900 seconds total
+            bar_fraction = min(max(elapsed_sec / 900.0, 0.05), 1.0)
+
+            # Projected volume for the current forming bar
+            projected_vol = float(df["volume"].iloc[-1]) / bar_fraction
+            projected_curr_rvol = projected_vol / (float(vol_sma_20.iloc[-1]) + 1e-9)
+
+            # Last closed bar's settled RVOL
+            settled_prev_rvol = float(base_rvol.iloc[-2]) if len(base_rvol) >= 2 else 1.0
+
+            # Effective RVOL: highest of projected current pace or confirmed previous bar
+            effective_curr_rvol = max(projected_curr_rvol, settled_prev_rvol * 0.95)
+            base_rvol.iloc[-1] = effective_curr_rvol
+        except Exception:
+            pass
+
+    df["rvol_20"] = base_rvol
 
     # 4. RSI 14 (Wilder's Smoothing)
     delta = df["close"].diff()
@@ -690,7 +719,7 @@ STRATEGY_REGISTRY = {
 }
 
 
-def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str]) -> List[Dict[str, Any]]:
+def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str], ind_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     """
     Calculates technical indicators and runs all currently enabled strategies.
     Returns candidate setup dictionaries matching the unified schema.
@@ -699,8 +728,9 @@ def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str]) -> Li
     if df.empty or len(df) < 50:
         return []
 
-    # Calculate indicators once for all strategy plugins
-    ind_df = calc_indicators(df)
+    # Calculate indicators once for all strategy plugins if not passed
+    if ind_df is None:
+        ind_df = calc_indicators(df)
     candidate_setups: List[Dict[str, Any]] = []
 
     # Build case-insensitive lookup

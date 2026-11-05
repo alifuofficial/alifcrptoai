@@ -3116,18 +3116,18 @@ export default function CommandCenterPage() {
 
                   <div>
                     <label className="block text-xs font-semibold text-textMain mb-1">
-                      Min Relative Volume RVOL: {formSettings.min_rvol || 1.2}x
+                      Min Relative Volume RVOL: {formSettings.min_rvol || 1.0}x
                     </label>
                     <input
                       type="range"
                       min="0.8"
                       max="2.5"
                       step="0.1"
-                      value={formSettings.min_rvol || 1.2}
+                      value={formSettings.min_rvol || 1.0}
                       onChange={(e) => setFormSettings({ ...formSettings, min_rvol: parseFloat(e.target.value) })}
                       className="w-full accent-brand-600 cursor-pointer"
                     />
-                    <span className="text-[10px] text-textMuted">Range: 0.8x to 2.5x</span>
+                    <span className="text-[10px] text-textMuted">Range: 0.8x to 2.5x (1.0x captures standard breakout/pullback volume).</span>
                   </div>
                 </div>
 
