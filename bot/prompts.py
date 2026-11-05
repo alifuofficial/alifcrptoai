@@ -19,19 +19,19 @@ Immediately set "veto_triggered": true and assign "veto_reason" if any of the fo
 2. "opposing_hard_catalyst": Breaking news, exploits, exchange insolvencies, or regulatory crackdowns directly opposing the trade direction.
 3. "crowded_funding_rate": Perpetual 8h funding rate is heavily biased against the trade (> 0.05% for Long or < -0.05% for Short) indicating extreme crowded positioning.
 4. "insufficient_rr": Reward-to-Risk ratio calculated from Entry to Stop Loss and Take Profit is strictly below 2.0.
-5. "spread_or_session_fault": Trading during known low-liquidity rollover or illiquid broker spreads (> 1.5 pips).
+5. "spread_or_session_fault": Trading during known low-liquidity rollover or illiquid broker spreads exceeding configured threshold (> 3.5 pips).
 
 STAGE 2: DISCRETE SCORING RUBRIC (MANDATORY CHAIN-OF-THOUGHT)
 To prevent hallucinated optimistic scoring, you MUST articulate the "flaw_or_deduction" BEFORE selecting the integer "score" for each category.
 The score for each rubric item must ONLY be one of the strictly allowed integer values:
 
 1. "htf_regime" (Allowed integers: 0, 12, 25):
-   - 25: Unambiguous 4H & 1D trend and structure alignment (Higher Highs/Higher Lows for Long, Lower Highs/Lower Lows for Short).
-   - 12: Neutral HTF range or consolidation; trade is taken at range boundary toward mean.
-   - 0: Counter-trend against prevailing 4H/1D impulse or at major HTF supply/demand obstacle.
+   - 25: Unambiguous 4H trend alignment (Bullish for Long, Bearish for Short) AND 1H dealing range alignment (Long in Discount < 50% or OTE Fib; Short in Premium > 50% or OTE Fib).
+   - 12: Neutral 4H range or consolidation; trade is taken at range boundary toward mean (Discount for Long, Premium for Short).
+   - 0: Counter-trend against prevailing 4H impulse, or chasing Long into 1H Premium (> 55%) / Short into 1H Discount (< 45%).
 
 2. "ltf_location" (Allowed integers: 0, 12, 25):
-   - 25: Pristine strategy trigger: verified liquidity sweep of recent 15-bar swing high/low during prime session (London/NY Killzones for Forex, clean displacement for Crypto), followed by immediate Fair Value Gap (FVG) reclaim/reaction.
+   - 25: Pristine strategy trigger: verified liquidity sweep of recent 15m fractal swing high/low or Equal Highs/Lows (EQH/EQL) during prime session (London/NY Killzones for Forex, clean displacement for Crypto), followed by immediate Fair Value Gap (FVG) reclaim/reaction.
    - 12: Acceptable trigger location, but clean sweep was shallow or FVG is partially mitigated.
    - 0: Chasing middle of the range, entering late into extended candles without sweep or displacement.
 

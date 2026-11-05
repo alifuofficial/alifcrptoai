@@ -180,11 +180,223 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def detect_fractal_pivots(df: pd.DataFrame, window: int = 2) -> Dict[str, List[Dict[str, Any]]]:
     """
-    SMC Liquidity Sweep Strategy:
-    Scans for a 15-bar swing high/low sweep followed by displacement reclaim
-    and Fair Value Gap (FVG) confirmation.
+    Computes 5-bar Bill Williams fractal pivot highs and lows (window=2 bars on each side).
+    High fractal: High[i] > High[i-1], High[i-2], High[i+1], High[i+2]
+    Low fractal:  Low[i]  < Low[i-1], Low[i-2], Low[i+1], Low[i+2]
+    Returns confirmed un-repainting pivot dictionaries.
+    """
+    if len(df) < (window * 2 + 1):
+        return {"highs": [], "lows": []}
+
+    highs: List[Dict[str, Any]] = []
+    lows: List[Dict[str, Any]] = []
+    n = len(df)
+
+    # Evaluate up to n - window so we don't repaint the in-progress forming bar
+    for i in range(window, n - window):
+        curr_high = float(df["high"].iloc[i])
+        curr_low = float(df["low"].iloc[i])
+
+        # Check high fractal
+        is_high = True
+        for offset in range(-window, window + 1):
+            if offset != 0 and float(df["high"].iloc[i + offset]) >= curr_high:
+                is_high = False
+                break
+        if is_high:
+            highs.append({
+                "index": i,
+                "price": curr_high,
+                "timestamp": str(df["timestamp"].iloc[i]) if "timestamp" in df.columns else None
+            })
+
+        # Check low fractal
+        is_low = True
+        for offset in range(-window, window + 1):
+            if offset != 0 and float(df["low"].iloc[i + offset]) <= curr_low:
+                is_low = False
+                break
+        if is_low:
+            lows.append({
+                "index": i,
+                "price": curr_low,
+                "timestamp": str(df["timestamp"].iloc[i]) if "timestamp" in df.columns else None
+            })
+
+    return {"highs": highs, "lows": lows}
+
+
+def detect_liquidity_pools(df_15m: pd.DataFrame, tolerance_pct: float = 0.0015) -> Dict[str, Any]:
+    """
+    Identifies institutional liquidity pools on the 15m timeframe:
+    1. Equal Highs (EQH): Multiple swing highs within 0.15% tolerance where retail buy stops reside.
+    2. Equal Lows (EQL): Multiple swing lows within 0.15% tolerance where retail sell stops reside.
+    3. Most recent validated fractal swing high and swing low.
+    """
+    pivots = detect_fractal_pivots(df_15m, window=2)
+    highs = pivots["highs"]
+    lows = pivots["lows"]
+
+    eqh_pools: List[Dict[str, Any]] = []
+    if len(highs) >= 2:
+        for i in range(len(highs) - 1):
+            for j in range(i + 1, min(i + 4, len(highs))):
+                p1, p2 = highs[i]["price"], highs[j]["price"]
+                diff = abs(p1 - p2) / max(p1, 1e-9)
+                if diff <= tolerance_pct:
+                    eqh_pools.append({
+                        "price": max(p1, p2),
+                        "indices": (highs[i]["index"], highs[j]["index"]),
+                        "diff_pct": round(diff * 100, 3)
+                    })
+
+    eql_pools: List[Dict[str, Any]] = []
+    if len(lows) >= 2:
+        for i in range(len(lows) - 1):
+            for j in range(i + 1, min(i + 4, len(lows))):
+                p1, p2 = lows[i]["price"], lows[j]["price"]
+                diff = abs(p1 - p2) / max(p1, 1e-9)
+                if diff <= tolerance_pct:
+                    eql_pools.append({
+                        "price": min(p1, p2),
+                        "indices": (lows[i]["index"], lows[j]["index"]),
+                        "diff_pct": round(diff * 100, 3)
+                    })
+
+    recent_swing_high = highs[-1]["price"] if highs else float(df_15m["high"].iloc[-15:-1].max())
+    recent_swing_low = lows[-1]["price"] if lows else float(df_15m["low"].iloc[-15:-1].min())
+
+    return {
+        "eqh_pools": eqh_pools,
+        "eql_pools": eql_pools,
+        "recent_swing_high": recent_swing_high,
+        "recent_swing_low": recent_swing_low,
+        "all_pivots": pivots
+    }
+
+
+def calc_top_down_structure(
+    df_15m: pd.DataFrame,
+    df_1h: Optional[pd.DataFrame] = None,
+    df_4h: Optional[pd.DataFrame] = None
+) -> Dict[str, Any]:
+    """
+    Computes institutional Top-Down Market Structure across 4H, 1H, and 15m:
+    1. 4H Macro Trend & Structure (Higher Highs/Higher Lows vs Lower Highs/Lower Lows, 4H EMA 50 alignment).
+    2. 1H Intermediate Dealing Range [Range Low, Range High], Equilibrium (50%), and Premium vs. Discount zone.
+    3. 15m Local Liquidity Pools (EQH, EQL, Fractal Pivots).
+    """
+    latest_price = float(df_15m["close"].iloc[-1])
+
+    # --- 1. 4H Macro Analysis ---
+    htf_4h_bias = "NEUTRAL"
+    htf_4h_high = latest_price * 1.05
+    htf_4h_low = latest_price * 0.95
+    ema_50_4h = None
+
+    if df_4h is not None and len(df_4h) >= 20:
+        c4 = df_4h["close"].astype(float)
+        ema_20_4h = float(c4.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema_50_4h = float(c4.ewm(span=50, adjust=False).mean().iloc[-1])
+        curr_4h_close = float(c4.iloc[-1])
+
+        htf_4h_high = float(df_4h["high"].astype(float).max())
+        htf_4h_low = float(df_4h["low"].astype(float).min())
+
+        pivots_4h = detect_fractal_pivots(df_4h, window=2)
+        h4_highs = pivots_4h["highs"]
+        h4_lows = pivots_4h["lows"]
+
+        is_hh_hl = False
+        is_lh_ll = False
+        if len(h4_highs) >= 2 and len(h4_lows) >= 2:
+            is_hh_hl = (h4_highs[-1]["price"] > h4_highs[-2]["price"]) and (h4_lows[-1]["price"] > h4_lows[-2]["price"])
+            is_lh_ll = (h4_highs[-1]["price"] < h4_highs[-2]["price"]) and (h4_lows[-1]["price"] < h4_lows[-2]["price"])
+
+        if curr_4h_close > ema_50_4h and (is_hh_hl or curr_4h_close > ema_20_4h):
+            htf_4h_bias = "BULLISH"
+        elif curr_4h_close < ema_50_4h and (is_lh_ll or curr_4h_close < ema_20_4h):
+            htf_4h_bias = "BEARISH"
+        else:
+            htf_4h_bias = "NEUTRAL_RANGE"
+
+    # --- 2. 1H Intermediate Dealing Range & Equilibrium ---
+    itf_1h_bias = "NEUTRAL"
+    range_high_1h = latest_price * 1.03
+    range_low_1h = latest_price * 0.97
+    equilibrium_1h = latest_price
+    range_depth = 0.50
+    zone_1h = "EQUILIBRIUM"
+    is_ote = False
+
+    if df_1h is not None and len(df_1h) >= 20:
+        c1 = df_1h["close"].astype(float)
+        ema_20_1h = float(c1.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema_50_1h = float(c1.ewm(span=50, adjust=False).mean().iloc[-1])
+        curr_1h_close = float(c1.iloc[-1])
+
+        h1_window = df_1h.iloc[-30:]
+        range_high_1h = float(h1_window["high"].astype(float).max())
+        range_low_1h = float(h1_window["low"].astype(float).min())
+
+        equilibrium_1h = (range_high_1h + range_low_1h) / 2.0
+        range_span = max(range_high_1h - range_low_1h, 1e-9)
+        range_depth = (latest_price - range_low_1h) / range_span
+        range_depth = max(0.0, min(1.0, range_depth))
+
+        if range_depth < 0.48:
+            zone_1h = "DISCOUNT"
+        elif range_depth > 0.52:
+            zone_1h = "PREMIUM"
+        else:
+            zone_1h = "EQUILIBRIUM"
+
+        # Bullish OTE (deep retracement 61.8% to 78.6% from top)
+        # Bearish OTE (deep retracement 61.8% to 78.6% from bottom)
+        if (0.214 <= range_depth <= 0.382) or (0.618 <= range_depth <= 0.786):
+            is_ote = True
+
+        if curr_1h_close > ema_20_1h and curr_1h_close > ema_50_1h:
+            itf_1h_bias = "BULLISH"
+        elif curr_1h_close < ema_20_1h and curr_1h_close < ema_50_1h:
+            itf_1h_bias = "BEARISH"
+        else:
+            itf_1h_bias = "NEUTRAL"
+
+    # --- 3. 15m Local Liquidity Pools ---
+    pools_15m = detect_liquidity_pools(df_15m)
+
+    return {
+        "htf_4h": {
+            "bias": htf_4h_bias,
+            "range_high": htf_4h_high,
+            "range_low": htf_4h_low,
+            "ema_50": ema_50_4h
+        },
+        "itf_1h": {
+            "bias": itf_1h_bias,
+            "range_high": range_high_1h,
+            "range_low": range_low_1h,
+            "equilibrium": equilibrium_1h,
+            "range_depth_pct": round(range_depth * 100, 1),
+            "zone": zone_1h,
+            "is_ote": is_ote
+        },
+        "ltf_15m": pools_15m,
+        "latest_price": latest_price
+    }
+
+
+def smc_liquidity_sweep(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """
+    SMC Liquidity Sweep Strategy (Top-Down Multi-Timeframe Price Action):
+    1. Scans for 15m sweep of a confirmed Fractal Swing or Equal High/Low (EQH/EQL) liquidity pool.
+    2. Requires displacement reclaim candle back inside the range with verified Fair Value Gap (FVG).
+    3. Enforces 4H Trend and 1H Dealing Range discipline:
+       - LONG: 4H != BEARISH, 1H in DISCOUNT (depth <= 52%) or OTE.
+       - SHORT: 4H != BULLISH, 1H in PREMIUM (depth >= 48%) or OTE.
     """
     if len(df) < 30:
         return None
@@ -197,15 +409,48 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     atr = float(curr["atr_14"]) if pd.notnull(curr["atr_14"]) else float(curr["close"] * 0.01)
     rvol = float(curr["rvol_20"]) if pd.notnull(curr["rvol_20"]) else 1.0
 
-    # 15-bar swing lookback excluding the current bar
-    swing_window = df.iloc[-16:-1]
-    swing_low = float(swing_window["low"].min())
-    swing_high = float(swing_window["high"].max())
+    # Extract 15m liquidity levels
+    if top_down_context and "ltf_15m" in top_down_context:
+        pools = top_down_context["ltf_15m"]
+    else:
+        pools = detect_liquidity_pools(df)
+
+    swing_low = pools.get("recent_swing_low")
+    swing_high = pools.get("recent_swing_high")
+    eql_pools = pools.get("eql_pools", [])
+    eqh_pools = pools.get("eqh_pools", [])
+
+    sweep_target_low = float(swing_low) if swing_low is not None else float(df["low"].iloc[-16:-1].min())
+    if eql_pools:
+        sweep_target_low = min(sweep_target_low, float(eql_pools[-1]["price"]))
+
+    sweep_target_high = float(swing_high) if swing_high is not None else float(df["high"].iloc[-16:-1].max())
+    if eqh_pools:
+        sweep_target_high = max(sweep_target_high, float(eqh_pools[-1]["price"]))
+
+    # Top-Down Context filters
+    htf_bias = "NEUTRAL"
+    itf_zone = "EQUILIBRIUM"
+    itf_depth = 50.0
+    itf_ote = False
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_zone = itf.get("zone", "EQUILIBRIUM")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
+        itf_ote = itf.get("is_ote", False)
 
     # --- Bullish Sweep Setup ---
-    # Price swept below swing_low, but closed back above swing_low with bullish displacement
-    if (prev["low"] < swing_low or curr["low"] < swing_low) and curr["close"] > swing_low:
+    # Price swept below sweep_target_low, but closed back above sweep_target_low with bullish displacement
+    if (prev["low"] < sweep_target_low or curr["low"] < sweep_target_low) and curr["close"] > sweep_target_low:
         if curr["close"] > curr["open"]:  # Bullish candle
+            # Top-Down Institutional Discipline: NEVER buy in high Premium or against strong 4H Bearish trend
+            if htf_bias == "BEARISH" and itf_depth > 35.0:
+                return None
+            if itf_zone == "PREMIUM" and itf_depth > 55.0:
+                return None  # Do not chase longs in premium
+
             # Check for bullish FVG (low of bar i > high of bar i-2 or bar i-1 > bar i-3)
             has_fvg = (float(curr["low"]) > float(prev2["high"])) or (float(prev["low"]) > float(df.iloc[-4]["high"]))
             if not has_fvg:
@@ -215,21 +460,29 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             sl = swept_low - (0.5 * atr)
             if entry > sl:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
+                ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
+                pool_desc = "Equal Lows (EQL)" if eql_pools and sweep_target_low == eql_pools[-1]["price"] else "15m Fractal Low"
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "LONG",
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept 15-bar low ({format_price_dynamic(swing_low)}) with bullish displacement reclaim. Verified Bullish FVG. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_low)}) + Bullish FVG reclaim. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
 
     # --- Bearish Sweep Setup ---
-    # Price swept above swing_high, but closed back below swing_high with bearish displacement
-    if (prev["high"] > swing_high or curr["high"] > swing_high) and curr["close"] < swing_high:
+    # Price swept above sweep_target_high, but closed back below sweep_target_high with bearish displacement
+    if (prev["high"] > sweep_target_high or curr["high"] > sweep_target_high) and curr["close"] < sweep_target_high:
         if curr["close"] < curr["open"]:  # Bearish candle
+            # Top-Down Institutional Discipline: NEVER sell in deep Discount or against strong 4H Bullish trend
+            if htf_bias == "BULLISH" and itf_depth < 65.0:
+                return None
+            if itf_zone == "DISCOUNT" and itf_depth < 45.0:
+                return None  # Do not short in discount
+
             # Check for bearish FVG (high of bar i < low of bar i-2 or bar i-1 < low of bar i-3)
             has_fvg = (float(curr["high"]) < float(prev2["low"])) or (float(prev["high"]) < float(df.iloc[-4]["low"]))
             if not has_fvg:
@@ -239,13 +492,15 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             sl = swept_high + (0.5 * atr)
             if sl > entry:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
+                ote_tag = " [OTE Fib 61.8-78.6%]" if itf_ote else ""
+                pool_desc = "Equal Highs (EQH)" if eqh_pools and sweep_target_high == eqh_pools[-1]["price"] else "15m Fractal High"
                 return {
                     "strategy_name": "SMC_Liquidity_Sweep",
                     "side": "SHORT",
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept 15-bar high ({format_price_dynamic(swing_high)}) with bearish displacement reclaim. Verified Bearish FVG. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_high)}) + Bearish FVG reclaim. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -253,19 +508,33 @@ def smc_liquidity_sweep(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return None
 
 
-def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def strat_ict_orderblock_fvg(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     ICT Order Block + Fair Value Gap Strategy (smartmoneyconcepts library):
     1. Detects structural swing points with smc.swing_highs_lows.
     2. Identifies BOS/CHoCH with smc.bos_choch.
     3. Finds institutional Order Blocks with smc.ob and FVGs with smc.fvg.
-    4. Triggers LONG if bullish structure break occurred in last 3 bars paired with
+    4. Enforces Top-Down 4H & 1H structural alignment:
+       - LONG: 1H in DISCOUNT (depth <= 55%), 4H != BEARISH.
+       - SHORT: 1H in PREMIUM (depth >= 45%), 4H != BULLISH.
+    5. Triggers LONG if bullish structure break occurred in last 3 bars paired with
        an unmitigated bullish FVG/OB below current price (SL placed at bottom * 0.997, TP at 2.3R).
-    5. Triggers SHORT if bearish structure break occurred in last 3 bars paired with
+    6. Triggers SHORT if bearish structure break occurred in last 3 bars paired with
        an unmitigated bearish FVG/OB above current price (SL placed at top * 1.003, TP at 2.3R).
     """
     if len(df) < 30:
         return None
+
+    # Top-Down Context filters
+    htf_bias = "NEUTRAL"
+    itf_zone = "EQUILIBRIUM"
+    itf_depth = 50.0
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_zone = itf.get("zone", "EQUILIBRIUM")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
 
     # Format column names for smartmoneyconcepts library
     ohlc = df.rename(columns={"vol": "volume"}).copy()
@@ -309,6 +578,13 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
     # --- Bullish ICT Setup ---
     if bullish_structure:
+        # Top-down filter: Never enter ICT Long into HTF resistance or high Premium
+        if htf_bias == "BEARISH" and itf_depth > 35.0:
+            bullish_structure = False
+        elif itf_zone == "PREMIUM" and itf_depth > 55.0:
+            bullish_structure = False
+
+    if bullish_structure:
         support_levels: List[float] = []
 
         # Check for unmitigated Bullish FVG (FVG == 1) below entry
@@ -341,12 +617,19 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
 
     # --- Bearish ICT Setup ---
+    if bearish_structure:
+        # Top-down filter: Never enter ICT Short into HTF support or deep Discount
+        if htf_bias == "BULLISH" and itf_depth < 65.0:
+            bearish_structure = False
+        elif itf_zone == "DISCOUNT" and itf_depth < 45.0:
+            bearish_structure = False
+
     if bearish_structure:
         resistance_levels: List[float] = []
 
@@ -380,7 +663,7 @@ def strat_ict_orderblock_fvg(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -457,13 +740,14 @@ def _calc_supertrend_adx_math(df: pd.DataFrame, length: int = 10, multiplier: fl
         return None, None, None, None
 
 
-def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def strat_supertrend_adx(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     Supertrend + ADX Momentum Strategy (pandas-ta-classic library with auto-math fallback):
     1. Computes Supertrend (10, 3.0) and ADX (14).
     2. Detects direction flip on latest closed candle (from -1 to 1 for LONG, or 1 to -1 for SHORT).
     3. Confirms trend strength: ADX_14 > 25 and RVOL >= 1.2.
-    4. Sets SL at the active Supertrend line and TP at 2.2R.
+    4. Top-Down Guardrail: Blocks chasing into extreme HTF boundaries (no longs at >70% range, no shorts at <30%).
+    5. Sets SL at the active Supertrend line and TP at 2.2R.
     """
     if len(df) < 30:
         return None
@@ -506,8 +790,23 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     if adx_val < 25.0 or rvol < 1.2:
         return None
 
+    # Top-Down Context filters
+    htf_bias = "NEUTRAL"
+    itf_depth = 50.0
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
+
     # --- Bullish Supertrend Flip (-1 -> 1) ---
     if prev_dir == -1 and curr_dir == 1:
+        if top_down_context:
+            if htf_bias == "BEARISH":
+                return None
+            if itf_depth > 70.0:
+                return None  # Do not chase breakout into extreme range ceiling
+
         sl = st_line if st_line < entry else (entry - (1.5 * atr))
         if entry > sl:
             entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.2)
@@ -517,13 +816,19 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Supertrend Bullish Flip (-1->1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
+                "setup_notes": f"Supertrend Bullish Flip with ADX: {adx_val:.1f} > 25. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
 
     # --- Bearish Supertrend Flip (1 -> -1) ---
     if prev_dir == 1 and curr_dir == -1:
+        if top_down_context:
+            if htf_bias == "BULLISH":
+                return None
+            if itf_depth < 30.0:
+                return None  # Do not chase breakdown into extreme range floor
+
         sl = st_line if st_line > entry else (entry + (1.5 * atr))
         if sl > entry:
             entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.2)
@@ -533,7 +838,7 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Supertrend Bearish Flip (1->-1) with ADX: {adx_val:.1f} > 25. RVOL: {rvol:.2f}x. SL at ST line {format_price_dynamic(st_line)}",
+                "setup_notes": f"Supertrend Bearish Flip with ADX: {adx_val:.1f} > 25. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -541,11 +846,12 @@ def strat_supertrend_adx(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return None
 
 
-def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def ema_trend_pullback(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     EMA Trend Pullback Strategy:
     Detects strong trend alignment (EMA 20 > EMA 50) and enters on a clean
     pullback bounce / rejection candle touching EMA 20.
+    Enforces Top-Down 4H & 1H structural guardrails.
     """
     if len(df) < 55:
         return None
@@ -559,9 +865,22 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     ema_50 = float(curr["ema_50"])
     prev_ema_20 = float(prev["ema_20"])
 
+    # Top-Down Context filters
+    htf_bias = "NEUTRAL"
+    itf_depth = 50.0
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
+
     # Bullish Continuation Pullback
     # EMA 20 > EMA 50 with positive slope, low touches near EMA 20, close reclaims above EMA 20
     if ema_20 > ema_50 and ema_20 >= prev_ema_20:
+        if top_down_context:
+            if htf_bias == "BEARISH" or itf_depth > 65.0:
+                return None
+
         if float(curr["low"]) <= ema_20 * 1.002 and float(curr["close"]) > ema_20 and float(curr["close"]) > float(curr["open"]):
             entry = float(curr["close"])
             # SL placed below EMA 50 or 1.5 * ATR
@@ -574,7 +893,7 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bullish dynamic bounce off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Bullish dynamic bounce off EMA 20 ({format_price_dynamic(ema_20)}). 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -582,6 +901,10 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Bearish Continuation Pullback
     # EMA 20 < EMA 50 with negative slope, high touches near EMA 20, close reclaims below EMA 20
     if ema_20 < ema_50 and ema_20 <= prev_ema_20:
+        if top_down_context:
+            if htf_bias == "BULLISH" or itf_depth < 35.0:
+                return None
+
         if float(curr["high"]) >= ema_20 * 0.998 and float(curr["close"]) < ema_20 and float(curr["close"]) < float(curr["open"]):
             entry = float(curr["close"])
             sl = max(ema_50 + (0.3 * atr), entry + (1.5 * atr))
@@ -593,7 +916,7 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bearish dynamic rejection off EMA 20 ({format_price_dynamic(ema_20)}). RVOL: {rvol:.2f}x",
+                    "setup_notes": f"Bearish dynamic rejection off EMA 20 ({format_price_dynamic(ema_20)}). 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -601,11 +924,12 @@ def ema_trend_pullback(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return None
 
 
-def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def bb_volatility_breakout(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     BB Volatility Breakout Strategy:
     Detects severe volatility compression (BB Width < 0.025 in recent bars)
     followed by an explosive expansion breakout candle with RVOL >= 1.4.
+    Enforces Top-Down 4H & 1H structural guardrails.
     """
     if len(df) < 30:
         return None
@@ -626,8 +950,21 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     bb_lower = float(curr["bb_lower"])
     bb_mid = float(curr["bb_mid"])
 
+    # Top-Down Context filters
+    htf_bias = "NEUTRAL"
+    itf_depth = 50.0
+    if top_down_context:
+        htf = top_down_context.get("htf_4h", {})
+        itf = top_down_context.get("itf_1h", {})
+        htf_bias = htf.get("bias", "NEUTRAL")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
+
     # Bullish Breakout
     if entry > bb_upper and rvol >= 1.4 and float(curr["close"]) > float(curr["open"]):
+        if top_down_context:
+            if htf_bias == "BEARISH" or itf_depth > 75.0:
+                return None
+
         sl = max(bb_mid, entry - (1.5 * atr))
         if entry > sl:
             entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=2.5)
@@ -637,13 +974,17 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Bollinger Squeeze Breakout Upper. Width expanded from <0.025. RVOL: {rvol:.2f}x",
+                "setup_notes": f"Bollinger Squeeze Breakout Upper. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
 
     # Bearish Breakout
     if entry < bb_lower and rvol >= 1.4 and float(curr["close"]) < float(curr["open"]):
+        if top_down_context:
+            if htf_bias == "BULLISH" or itf_depth < 25.0:
+                return None
+
         sl = min(bb_mid, entry + (1.5 * atr))
         if sl > entry:
             entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=2.5)
@@ -653,7 +994,7 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Bollinger Squeeze Breakout Lower. Width expanded from <0.025. RVOL: {rvol:.2f}x",
+                "setup_notes": f"Bollinger Squeeze Breakout Lower. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -661,11 +1002,12 @@ def bb_volatility_breakout(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return None
 
 
-def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def rsi_divergence_reversal(df: pd.DataFrame, top_down_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     RSI Divergence / Exhaustion Reversal Strategy:
     Detects extreme oversold (< 28) or overbought (> 72) conditions followed by
     a momentum reclaim and an engulfing reversal price action candle.
+    Enforces Top-Down 4H & 1H structural guardrails.
     """
     if len(df) < 30:
         return None
@@ -678,9 +1020,20 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     curr_rsi = float(curr["rsi_14"])
     recent_rsi = df["rsi_14"].iloc[-6:-1]
 
+    # Top-Down Context filters
+    itf_zone = "EQUILIBRIUM"
+    itf_depth = 50.0
+    if top_down_context:
+        itf = top_down_context.get("itf_1h", {})
+        itf_zone = itf.get("zone", "EQUILIBRIUM")
+        itf_depth = float(itf.get("range_depth_pct", 50.0))
+
     # Bullish Reversal: Prior RSI dipped below 28, now reclaiming above 30 with Bullish Engulfing
     had_oversold = (recent_rsi < 28.0).any()
     if had_oversold and curr_rsi > 30.0:
+        if top_down_context and itf_zone == "PREMIUM" and itf_depth > 55.0:
+            return None  # Reversal longs only valid in Discount or Equilibrium
+
         is_bullish_engulfing = (
             float(curr["close"]) > float(curr["open"]) and
             float(curr["close"]) >= float(prev["high"]) and
@@ -697,7 +1050,7 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"RSI Oversold Exhaustion Reclaim ({curr_rsi:.1f}). Bullish Engulfing. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"RSI Exhaustion Reclaim ({curr_rsi:.1f}). Bullish Engulfing. 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -705,6 +1058,9 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     # Bearish Reversal: Prior RSI spiked above 72, now falling below 70 with Bearish Engulfing
     had_overbought = (recent_rsi > 72.0).any()
     if had_overbought and curr_rsi < 70.0:
+        if top_down_context and itf_zone == "DISCOUNT" and itf_depth < 45.0:
+            return None  # Reversal shorts only valid in Premium or Equilibrium
+
         is_bearish_engulfing = (
             float(curr["close"]) < float(curr["open"]) and
             float(curr["close"]) <= float(prev["low"]) and
@@ -721,7 +1077,7 @@ def rsi_divergence_reversal(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"RSI Overbought Exhaustion Rejection ({curr_rsi:.1f}). Bearish Engulfing. RVOL: {rvol:.2f}x",
+                    "setup_notes": f"RSI Exhaustion Rejection ({curr_rsi:.1f}). Bearish Engulfing. 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -739,9 +1095,17 @@ STRATEGY_REGISTRY = {
 }
 
 
-def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str], ind_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+def evaluate_enabled_strategies(
+    df: pd.DataFrame,
+    enabled_list: List[str],
+    ind_df: Optional[pd.DataFrame] = None,
+    df_1h: Optional[pd.DataFrame] = None,
+    df_4h: Optional[pd.DataFrame] = None,
+    top_down_context: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     """
     Calculates technical indicators and runs all currently enabled strategies.
+    Supports full Top-Down Multi-Timeframe Price Action (4H -> 1H -> 15m).
     Returns candidate setup dictionaries matching the unified schema.
     Supports case-insensitive & underscore-resilient strategy name matching.
     """
@@ -751,6 +1115,11 @@ def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str], ind_d
     # Calculate indicators once for all strategy plugins if not passed
     if ind_df is None:
         ind_df = calc_indicators(df)
+
+    # Compute Top-Down Market Structure context if not provided
+    if top_down_context is None:
+        top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h)
+
     candidate_setups: List[Dict[str, Any]] = []
 
     # Build case-insensitive lookup
@@ -764,7 +1133,12 @@ def evaluate_enabled_strategies(df: pd.DataFrame, enabled_list: List[str], ind_d
         if key in normalized_registry:
             actual_name, handler = normalized_registry[key]
             try:
-                candidate = handler(ind_df)
+                # Invoke with top_down_context keyword if supported
+                try:
+                    candidate = handler(ind_df, top_down_context=top_down_context)
+                except TypeError:
+                    candidate = handler(ind_df)
+
                 if candidate:
                     candidate_setups.append(candidate)
             except Exception as exc:

@@ -61,6 +61,8 @@ def start_health_server(port: int = 80):
 from strategies import (
     evaluate_enabled_strategies,
     calc_indicators,
+    calc_top_down_structure,
+    detect_liquidity_pools,
     round_price_dynamic,
     format_price_dynamic
 )
@@ -106,6 +108,41 @@ _EXCHANGE_CLIENT: Optional[ccxt.binanceusdm] = None
 _EXCHANGE_CONFIG_SIG: Optional[str] = None
 _BYBIT_CLIENT: Optional[ccxt.bybit] = None
 _BYBIT_CONFIG_SIG: Optional[str] = None
+
+# In-memory TTL cache for 1H and 4H OHLCV candles to prevent CCXT exchange rate limiting
+_HTF_CANDLE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def get_cached_ohlcv(exchange: Any, ex_sym: str, timeframe: str, limit: int = 60, ttl_sec: int = 600) -> Optional[List[Any]]:
+    """
+    Fetches OHLCV bars with in-memory TTL caching:
+    - 1H bars cached for 10 minutes (600s).
+    - 4H bars cached for 30 minutes (1800s).
+    """
+    if not exchange or not ex_sym:
+        return None
+    cache_key = f"{getattr(exchange, 'id', 'ex')}:{ex_sym}:{timeframe}"
+    now = time.time()
+
+    if cache_key in _HTF_CANDLE_CACHE:
+        entry = _HTF_CANDLE_CACHE[cache_key]
+        if (now - entry["timestamp"]) < ttl_sec and len(entry["data"]) >= (limit // 2):
+            return entry["data"]
+
+    try:
+        data = exchange.fetch_ohlcv(ex_sym, timeframe=timeframe, limit=limit)
+        if data and len(data) > 0:
+            _HTF_CANDLE_CACHE[cache_key] = {
+                "timestamp": now,
+                "data": data
+            }
+            return data
+    except Exception as exc:
+        if cache_key in _HTF_CANDLE_CACHE:
+            return _HTF_CANDLE_CACHE[cache_key]["data"]
+        return None
+
+    return None
 
 
 def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
@@ -1419,6 +1456,22 @@ def scan_and_execute_signals(
             latest_price = float(df["close"].iloc[-1])
             ind_df = calc_indicators(df)
 
+            # Fetch Multi-Timeframe 1H and 4H OHLCV with in-memory TTL caching (Top-Down Architecture)
+            ohlcv_1h = get_cached_ohlcv(exchange, ex_sym, timeframe="1h", limit=70, ttl_sec=600)
+            df_1h = None
+            if ohlcv_1h and len(ohlcv_1h) >= 20:
+                df_1h = pd.DataFrame(ohlcv_1h, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df_1h["timestamp"] = pd.to_datetime(df_1h["timestamp"], unit="ms")
+
+            ohlcv_4h = get_cached_ohlcv(exchange, ex_sym, timeframe="4h", limit=50, ttl_sec=1800)
+            df_4h = None
+            if ohlcv_4h and len(ohlcv_4h) >= 20:
+                df_4h = pd.DataFrame(ohlcv_4h, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df_4h["timestamp"] = pd.to_datetime(df_4h["timestamp"], unit="ms")
+
+            # Calculate institutional Top-Down Market Structure across 4H, 1H, and 15m
+            top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h)
+
             # Check funding rate or spread
             funding_rate = 0.0
             spread_pips = None
@@ -1450,12 +1503,22 @@ def scan_and_execute_signals(
             # Fetch news headlines
             headlines = fetch_crypto_headlines(symbol) if not is_fx else []
 
-            # Evaluate strategies
-            candidate_setups = evaluate_enabled_strategies(df, active_strats, ind_df=ind_df)
+            # Evaluate strategies with full Top-Down 4H -> 1H -> 15m Price Action
+            candidate_setups = evaluate_enabled_strategies(
+                df,
+                active_strats,
+                ind_df=ind_df,
+                df_1h=df_1h,
+                df_4h=df_4h,
+                top_down_context=top_down_context
+            )
             if not candidate_setups:
                 if _SCAN_HEARTBEAT_COUNT % 4 == 0:
                     unit_label = f"(${format_price_dynamic(latest_price)})"
-                    print(f"[scanner] {symbol} {unit_label} [{exchange_name.upper()}] -> 15m OHLCV checked across {len(active_strats)} quant strategies. No valid trigger on current bar. Monitoring...")
+                    h4_b = top_down_context["htf_4h"]["bias"]
+                    h1_z = top_down_context["itf_1h"]["zone"]
+                    h1_d = top_down_context["itf_1h"]["range_depth_pct"]
+                    print(f"[scanner] {symbol} {unit_label} [{exchange_name.upper()}] -> Top-Down checked (4H: {h4_b}, 1H: {h1_z} {h1_d}%). No valid trigger on current bar. Monitoring...")
                 continue
 
             print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} ({exchange_name.upper()}, Price: ${format_price_dynamic(latest_price)})!")
@@ -1508,7 +1571,7 @@ def scan_and_execute_signals(
 
                 session_info = get_forex_session_regime() if is_fx else None
 
-                # DeepSeek Audit Prompt construction
+                # DeepSeek / Gemini Audit Prompt construction with Top-Down Telemetry
                 audit_payload = {
                     "symbol": symbol,
                     "exchange": exchange_name,
@@ -1524,7 +1587,14 @@ def scan_and_execute_signals(
                     "funding_rate_pct": funding_rate,
                     "broker_spread_pips": spread_pips,
                     "forex_session_context": f"{session_info['session_name']} - {session_info['description']}" if session_info else "24/7 Continuous Crypto Market",
-                    "htf_regime_context": f"24h HTF Regime: {htf_status} (Latest Close: {format_price_dynamic(latest_price)}, 24h EMA50: {format_price_dynamic(ema_50_val)}, EMA20: {format_price_dynamic(ema_20_val)}, 24h Range: [{format_price_dynamic(l24)} - {format_price_dynamic(h24)}])",
+                    "top_down_4h_bias": top_down_context["htf_4h"]["bias"],
+                    "top_down_1h_zone": f"{top_down_context['itf_1h']['zone']} ({top_down_context['itf_1h']['range_depth_pct']}% of range, Equilibrium: ${format_price_dynamic(top_down_context['itf_1h']['equilibrium'])})",
+                    "optimal_trade_entry_fib": "YES (61.8% - 78.6% Fib Retracement)" if top_down_context["itf_1h"]["is_ote"] else "NEUTRAL",
+                    "htf_regime_context": (
+                        f"Top-Down Price Action: 4H Macro [{top_down_context['htf_4h']['bias']}] | "
+                        f"1H Dealing Zone: [{top_down_context['itf_1h']['zone']} at {top_down_context['itf_1h']['range_depth_pct']}% depth, 50% Equilibrium: ${format_price_dynamic(top_down_context['itf_1h']['equilibrium'])}] | "
+                        f"24h Trend Status: {htf_status}"
+                    ),
                     "latest_headlines": headlines,
                     "active_guardrail_lessons": lessons_block,
                     "macro_blackout_state": macro_status
