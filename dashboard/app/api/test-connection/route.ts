@@ -18,6 +18,12 @@ interface BinanceTestOptions {
   sandbox?: boolean;
 }
 
+interface BybitTestOptions {
+  apiKey?: string;
+  secret?: string;
+  sandbox?: boolean;
+}
+
 interface DeepSeekTestOptions {
   baseUrl?: string;
   apiKey?: string;
@@ -223,6 +229,119 @@ async function testBinance(options?: BinanceTestOptions) {
       service: "binance",
       message: `Binance Network Error / Timeout: ${err.message}`,
       latencyMs: latency,
+      sandbox,
+      configured: Boolean(apiKey && secret),
+    };
+  }
+}
+
+async function testBybit(options?: BybitTestOptions) {
+  const start = Date.now();
+  let apiKey = options?.apiKey?.trim();
+  let secret = options?.secret?.trim();
+  let sandbox = options?.sandbox;
+
+  if (!apiKey || !secret) {
+    try {
+      const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfg) {
+        if (!apiKey) apiKey = cfg.bybit_api_key_override?.trim() || process.env.BYBIT_API_KEY?.trim();
+        if (!secret) secret = cfg.bybit_secret_override?.trim() || process.env.BYBIT_API_SECRET?.trim();
+        if (sandbox === undefined) sandbox = Boolean(cfg.sandbox_mode);
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  const baseUrl = sandbox ? "https://api-testnet.bybit.com" : "https://api.bybit.com";
+
+  try {
+    // 1. Check Bybit V5 public server time
+    let serverTime = Date.now();
+    try {
+      const timeRes = await fetch(`${baseUrl}/v5/market/time`, {
+        method: "GET",
+        signal: AbortSignal.timeout(6000),
+      });
+      if (timeRes.ok) {
+        const timeData = await timeRes.json();
+        if (timeData?.timeSecond) {
+          serverTime = Number(timeData.timeSecond) * 1000;
+        }
+      }
+    } catch {
+      // fallback
+    }
+
+    if (!apiKey || !secret) {
+      return {
+        success: false,
+        service: "bybit",
+        message: "Bybit V5 server reachable, but API credentials are empty. Please enter your Bybit API Key & Secret.",
+        latencyMs: Date.now() - start,
+        sandbox,
+        configured: false,
+      };
+    }
+
+    // 2. Query V5 Unified Trading Account balance
+    const timestamp = Date.now().toString();
+    const recvWindow = "10000";
+    const queryString = "accountType=UNIFIED";
+    const signString = timestamp + apiKey + recvWindow + queryString;
+    const signature = crypto.createHmac("sha256", secret).update(signString).digest("hex");
+
+    const authRes = await fetch(`${baseUrl}/v5/account/wallet-balance?${queryString}`, {
+      method: "GET",
+      headers: {
+        "X-BAPI-API-KEY": apiKey,
+        "X-BAPI-TIMESTAMP": timestamp,
+        "X-BAPI-SIGN": signature,
+        "X-BAPI-RECV-WINDOW": recvWindow,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    const authData = await authRes.json().catch(() => ({}));
+    const latency = Date.now() - start;
+
+    if (authData?.retCode === 0) {
+      const list = authData.result?.list || [];
+      const totalEquity = list[0]?.totalEquity ? Number(list[0].totalEquity) : 0;
+      const totalWallet = list[0]?.totalWalletBalance ? Number(list[0].totalWalletBalance) : 0;
+      const endpointLabel = sandbox ? "Testnet Bybit UTA" : "LIVE Bybit Unified Trading Account";
+
+      return {
+        success: true,
+        service: "bybit",
+        message: `Bybit Connected (${endpointLabel})! Equity: $${totalEquity.toLocaleString("en-US", { minimumFractionDigits: 2 })} (Latency: ${latency}ms)`,
+        latencyMs: latency,
+        sandbox,
+        configured: true,
+        details: {
+          totalEquity,
+          totalWalletBalance: totalWallet,
+          endpoint: baseUrl,
+        },
+      };
+    } else {
+      const retMsg = authData?.retMsg || `HTTP ${authRes.status}`;
+      return {
+        success: false,
+        service: "bybit",
+        message: `Bybit Authentication Failed: [RetCode ${authData?.retCode}] ${retMsg}`,
+        latencyMs: latency,
+        sandbox,
+        configured: true,
+      };
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      service: "bybit",
+      message: `Bybit Network Error: ${err.message}`,
+      latencyMs: Date.now() - start,
       sandbox,
       configured: Boolean(apiKey && secret),
     };
@@ -484,6 +603,11 @@ export async function POST(req: Request) {
       return NextResponse.json(result);
     }
 
+    if (service === "bybit") {
+      const result = await testBybit(params.bybit);
+      return NextResponse.json(result);
+    }
+
     if (service === "deepseek") {
       const result = await testDeepSeek(params.deepseek);
       return NextResponse.json(result);
@@ -500,8 +624,9 @@ export async function POST(req: Request) {
     }
 
     // Default: Test all services
-    const [binanceRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
+    const [binanceRes, bybitRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
       testBinance(params.binance),
+      testBybit(params.bybit),
       testDeepSeek(params.deepseek),
       testTelegram(params.telegram),
       testDatabase(),
@@ -514,6 +639,7 @@ export async function POST(req: Request) {
       service: "all",
       results: {
         binance: binanceRes,
+        bybit: bybitRes,
         deepseek: deepseekRes,
         telegram: telegramRes,
         database: dbRes,
@@ -531,8 +657,9 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const [binanceRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
+  const [binanceRes, bybitRes, deepseekRes, telegramRes, dbRes] = await Promise.all([
     testBinance(),
+    testBybit(),
     testDeepSeek(),
     testTelegram(),
     testDatabase(),
@@ -543,6 +670,7 @@ export async function GET() {
     service: "all",
     results: {
       binance: binanceRes,
+      bybit: bybitRes,
       deepseek: deepseekRes,
       telegram: telegramRes,
       database: dbRes,

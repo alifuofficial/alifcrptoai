@@ -64,6 +64,15 @@ from strategies import (
     round_price_dynamic,
     format_price_dynamic
 )
+from forex_guard import (
+    is_forex_symbol,
+    is_forex_market_open,
+    is_daily_rollover_blackout,
+    get_forex_session_regime,
+    get_forex_pip_size,
+    calculate_pip_distance,
+    calculate_forex_position_size,
+)
 from news_macro import check_usd_macro_blackout, fetch_crypto_headlines, _refresh_macro_calendar
 from notifier import (
     send_telegram_alert,
@@ -92,22 +101,49 @@ def get_supabase_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
-# Cached Binance exchange client to preserve pre-loaded markets across loops
+# Cached exchange clients to preserve pre-loaded markets across loops
 _EXCHANGE_CLIENT: Optional[ccxt.binanceusdm] = None
 _EXCHANGE_CONFIG_SIG: Optional[str] = None
+_BYBIT_CLIENT: Optional[ccxt.bybit] = None
+_BYBIT_CONFIG_SIG: Optional[str] = None
 
 
 def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
     """
-    Translates a canonical pair (e.g. 'BTC/USDT') to CCXT's exchange-specific market symbol.
-    For ccxt.binanceusdm (USDT-M Perpetual Futures in CCXT v4+), the unified symbol is 'BTC/USDT:USDT'.
-    Auto-corrects user typos such as 'SUI/USD' -> 'SUI/USDT' or 'INJ/USDTT' -> 'INJ/USDT'.
+    Translates a canonical pair (e.g. 'BTC/USDT' or 'EUR/USD') to CCXT's exchange-specific market symbol.
+    For Binance USDT-M Perpetuals: 'BTC/USDT:USDT'.
+    For Bybit V5 Unified / Forex: preserves 'EUR/USD', 'GBP/USD', 'USD/JPY', 'XAU/USD'
+    or resolves to exchange market mapping.
+    Auto-corrects crypto typos (e.g. 'SUI/USD' -> 'SUI/USDT' or 'INJ/USDTT' -> 'INJ/USDT').
     """
     if not symbol:
         return symbol
     clean = str(symbol).strip().upper()
 
-    # Self-healing typo correction (e.g. 'SUI/USD' -> 'SUI/USDT', 'INJ/USDTT' -> 'INJ/USDT')
+    # Preserve Forex & Commodity CFD symbols (do NOT convert to /USDT)
+    if is_forex_symbol(clean):
+        try:
+            if exchange and hasattr(exchange, "markets") and exchange.markets:
+                if clean in exchange.markets:
+                    return clean
+                # Check for Bybit linear settlement suffix (e.g. EUR/USD:USDT or EUR/USDT:USDT)
+                if "/" in clean:
+                    quote = clean.split("/")[1]
+                    candidate = f"{clean}:{quote}"
+                    if candidate in exchange.markets:
+                        return candidate
+                    usdt_candidate = f"{clean}:USDT"
+                    if usdt_candidate in exchange.markets:
+                        return usdt_candidate
+                raw_id = clean.replace("/", "")
+                for m_sym, m_data in exchange.markets.items():
+                    if m_data.get("id") == raw_id:
+                        return m_sym
+        except Exception:
+            pass
+        return clean
+
+    # Crypto self-healing typo correction (e.g. 'SUI/USD' -> 'SUI/USDT', 'INJ/USDTT' -> 'INJ/USDT')
     if "/" in clean:
         base, quote = clean.split("/", 1)
         if quote in ("USD", "USDTT", "UDST", "USTD"):
@@ -203,6 +239,41 @@ def get_binance_client(cfg: Dict[str, Any]) -> ccxt.binanceusdm:
     return exchange
 
 
+def get_bybit_client(cfg: Dict[str, Any]) -> ccxt.bybit:
+    """
+    Initializes Bybit V5 Unified Trading Account (UTA) client with API key overrides.
+    Caches the client instance to preserve loaded markets and avoid per-loop re-instantiation.
+    """
+    global _BYBIT_CLIENT, _BYBIT_CONFIG_SIG
+
+    api_key = cfg.get("bybit_api_key_override") or os.getenv("BYBIT_API_KEY", "")
+    secret = cfg.get("bybit_secret_override") or os.getenv("BYBIT_API_SECRET", "")
+    config_sig = f"{api_key}:{secret}"
+
+    if _BYBIT_CLIENT is not None and _BYBIT_CONFIG_SIG == config_sig:
+        return _BYBIT_CLIENT
+
+    exchange = ccxt.bybit({
+        "apiKey": api_key,
+        "secret": secret,
+        "enableRateLimit": True,
+        "options": {
+            "defaultType": "swap",       # V5 Unified Derivatives / Linear
+            "adjustForTimeDifference": True,
+            "recvWindow": 10000,
+        }
+    })
+
+    try:
+        exchange.load_markets()
+    except Exception as e:
+        print(f"[bybit] Notice during load_markets: {e}")
+
+    _BYBIT_CLIENT = exchange
+    _BYBIT_CONFIG_SIG = config_sig
+    return exchange
+
+
 def get_deepseek_client(cfg: Dict[str, Any]) -> OpenAI:
     """
     Initializes OpenAI client dynamically pointed at DeepSeek / OpenRouter / BeatAPI endpoint.
@@ -256,6 +327,16 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "quarantined_symbols": [],
         "deepseek_model": "deepseek-chat",
         "deepseek_base_url": "https://api.deepseek.com",
+        "exchange_mode": "binance",
+        "bybit_api_key_override": None,
+        "bybit_secret_override": None,
+        "enable_forex_trading": True,
+        "forex_symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"],
+        "forex_max_leverage": 30,
+        "forex_weekend_shield": True,
+        "forex_rollover_shield": True,
+        "forex_max_spread_pips": 1.5,
+        "panic_close_target": "ALL",
         "panic_close_all": False
     }
 
@@ -271,69 +352,120 @@ def update_bot_config(supabase: Client, updates: Dict[str, Any]) -> None:
 
 # --- EMERGENCY PANIC FLATTEN HANDLER ---
 
-def handle_panic_close_all(supabase: Client, exchange: ccxt.binanceusdm, cfg: Dict[str, Any]) -> None:
+def handle_panic_close_all(
+    supabase: Client,
+    binance_client: ccxt.binanceusdm,
+    bybit_client: Optional[ccxt.bybit],
+    cfg: Dict[str, Any]
+) -> None:
     """
     Emergency Circuit Breaker:
-    Cancels all open orders on Binance, closes all open positions at Market,
-    updates open trades in Supabase, deactivates bot, and fires an alert.
+    Supports granular target panic flattening: 'ALL', 'CRYPTO' (Binance), or 'FOREX' (Bybit).
+    Cancels open orders, closes active positions at Market, updates Supabase,
+    deactivates the bot, and fires an alert.
     """
-    print("[PANIC] !!! INITIATING EMERGENCY PANIC FLATTEN ALL POSITIONS & ORDERS !!!")
-    notify_panic_activated(cfg, "User clicked EMERGENCY PANIC CLOSE ALL in Command Center")
+    target = str(cfg.get("panic_close_target", "ALL")).upper()
+    print(f"[PANIC] !!! INITIATING EMERGENCY PANIC FLATTEN (Target: {target}) !!!")
+    notify_panic_activated(cfg, f"Emergency Panic Flatten Triggered (Target: {target})")
+
+    now_str = datetime.now(timezone.utc).isoformat()
 
     try:
-        # 1. Cancel all open orders for tracked symbols
-        for sym in cfg.get("symbols", []):
+        # A. Flatten Binance (Crypto)
+        if target in ("ALL", "CRYPTO") and binance_client:
+            print("[PANIC] Flattening Binance USD-M Orders & Positions...")
+            for sym in cfg.get("symbols", []):
+                try:
+                    ex_sym = resolve_exchange_symbol(binance_client, sym)
+                    binance_client.cancel_all_orders(ex_sym)
+                except Exception as e:
+                    print(f"[PANIC] Binance cancel order error for {sym}: {e}")
+
             try:
-                ex_sym = resolve_exchange_symbol(exchange, sym)
-                exchange.cancel_all_orders(ex_sym)
-                print(f"[PANIC] Cancelled all open orders for {sym} ({ex_sym})")
+                positions = binance_client.fetch_positions()
+                for pos in positions:
+                    contracts = float(pos.get("contracts", 0.0) or 0.0)
+                    if contracts > 0:
+                        sym = pos.get("symbol")
+                        pos_side = pos.get("side", "").upper()
+                        close_side = "sell" if pos_side == "LONG" else "buy"
+                        print(f"[PANIC] Closing Binance {pos_side} position on {sym} ({contracts} contracts)")
+                        binance_client.create_market_order(
+                            sym, close_side, contracts, params={"reduceOnly": True}
+                        )
             except Exception as e:
-                print(f"[PANIC] Order cancel error for {sym}: {e}")
+                print(f"[PANIC] Binance position close error: {e}")
 
-        # 2. Fetch and close all active positions
-        try:
-            positions = exchange.fetch_positions()
-            for pos in positions:
-                contracts = float(pos.get("contracts", 0.0) or 0.0)
-                if contracts > 0:
-                    sym = pos.get("symbol")
-                    pos_side = pos.get("side", "").upper() # "LONG" or "SHORT"
-                    close_side = "sell" if pos_side == "LONG" else "buy"
-                    print(f"[PANIC] Closing {pos_side} position on {sym} of size {contracts} at Market")
-                    exchange.create_market_order(
-                        sym,
-                        close_side,
-                        contracts,
-                        params={"reduceOnly": True}
-                    )
-        except Exception as e:
-            print(f"[PANIC] Position close error: {e}")
+            try:
+                supabase.table("trade_executions").update({
+                    "status": "MANUAL_CLOSE",
+                    "closed_at": now_str
+                }).eq("status", "OPEN").eq("exchange", "binance").execute()
+            except Exception as e:
+                print(f"[PANIC] Supabase Binance trade update error: {e}")
 
-        # 3. Update all OPEN trades in Supabase to MANUAL_CLOSE
-        try:
-            now_str = datetime.now(timezone.utc).isoformat()
-            supabase.table("trade_executions").update({
-                "status": "MANUAL_CLOSE",
-                "closed_at": now_str
-            }).eq("status", "OPEN").execute()
-        except Exception as e:
-            print(f"[PANIC] Supabase trade update error: {e}")
+        # B. Flatten Bybit (Forex / CFDs)
+        if target in ("ALL", "FOREX") and bybit_client:
+            print("[PANIC] Flattening Bybit V5 Forex Orders & Positions...")
+            for sym in cfg.get("forex_symbols", []):
+                try:
+                    ex_sym = resolve_exchange_symbol(bybit_client, sym)
+                    bybit_client.cancel_all_orders(ex_sym)
+                except Exception as e:
+                    print(f"[PANIC] Bybit cancel order error for {sym}: {e}")
+
+            try:
+                positions = bybit_client.fetch_positions()
+                for pos in positions:
+                    contracts = float(pos.get("contracts", 0.0) or 0.0)
+                    if contracts > 0:
+                        sym = pos.get("symbol")
+                        pos_side = pos.get("side", "").upper()
+                        close_side = "sell" if pos_side == "LONG" else "buy"
+                        print(f"[PANIC] Closing Bybit {pos_side} position on {sym} ({contracts} contracts)")
+                        bybit_client.create_market_order(
+                            sym, close_side, contracts, params={"reduceOnly": True}
+                        )
+            except Exception as e:
+                print(f"[PANIC] Bybit position close error: {e}")
+
+            try:
+                supabase.table("trade_executions").update({
+                    "status": "MANUAL_CLOSE",
+                    "closed_at": now_str
+                }).eq("status", "OPEN").eq("exchange", "bybit").execute()
+            except Exception as e:
+                print(f"[PANIC] Supabase Bybit trade update error: {e}")
+
+        # If ALL, ensure any remaining OPEN trades are marked MANUAL_CLOSE
+        if target == "ALL":
+            try:
+                supabase.table("trade_executions").update({
+                    "status": "MANUAL_CLOSE",
+                    "closed_at": now_str
+                }).eq("status", "OPEN").execute()
+            except Exception as e:
+                print(f"[PANIC] Supabase open trades cleanup notice: {e}")
 
     finally:
-        # Reset panic flag and deactivate bot
         update_bot_config(supabase, {
             "is_active": False,
             "panic_close_all": False
         })
-        print("[PANIC] Panic routine finished. Bot deactivated safely.")
+        print(f"[PANIC] Panic routine finished (Target: {target}). Bot deactivated safely.")
 
 
 # --- ACCOUNT TELEMETRY SYNC ---
 
-def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Dict[str, Any]) -> Dict[str, float]:
+def sync_account_telemetry(
+    supabase: Client,
+    binance_client: ccxt.binanceusdm,
+    bybit_client: Optional[ccxt.bybit],
+    cfg: Dict[str, Any]
+) -> Dict[str, float]:
     """
     Synchronizes wallet equity, free margin, intraday PnL, and open positions
-    from Binance USDT-M Futures to the account_snapshots table.
+    across Binance and Bybit into account_snapshots table.
     """
     equity = 0.0
     free_margin = 0.0
@@ -342,55 +474,93 @@ def sync_account_telemetry(supabase: Client, exchange: ccxt.binanceusdm, cfg: Di
     active_positions_json: List[Dict[str, Any]] = []
 
     sandbox = cfg.get("sandbox_mode", True)
-    has_api_keys = bool(exchange.apiKey and exchange.secret)
+    mode = str(cfg.get("exchange_mode", "binance")).lower()
 
-    try:
-        if not sandbox and has_api_keys:
-            balance = exchange.fetch_balance()
-            usdt_info = balance.get("USDT", {})
-            raw_total = usdt_info.get("total")
-            raw_free = usdt_info.get("free")
-            equity = float(raw_total) if raw_total is not None else 0.0
-            free_margin = float(raw_free) if raw_free is not None else 0.0
-
-            # Fetch live positions
-            positions = exchange.fetch_positions()
-            for p in positions:
-                contracts = float(p.get("contracts", 0.0) or 0.0)
-                if contracts > 0:
-                    raw_sym = p.get("symbol", "")
-                    active_positions_json.append({
-                        "symbol": to_canonical_symbol(raw_sym),
-                        "side": p.get("side"),
-                        "size": contracts,
-                        "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
-                        "mark_price": float(p.get("markPrice", 0.0) or 0.0),
-                        "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
-                        "leverage": p.get("leverage")
-                    })
-
-        # Calculate daily PnL from trades closed today (if table exists)
+    # 1. Binance Telemetry
+    if mode in ("binance", "dual") and binance_client:
         try:
-            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            res = supabase.table("trade_executions").select("pnl_usdt").gte("closed_at", today_start).execute()
-            if res.data:
-                daily_pnl = sum([float(t.get("pnl_usdt") or 0.0) for t in res.data])
-                if equity > 0:
-                    daily_pnl_pct = round((daily_pnl / equity) * 100.0, 2)
-        except Exception:
-            pass
+            if not sandbox and binance_client.apiKey and binance_client.secret:
+                balance = binance_client.fetch_balance()
+                usdt_info = balance.get("USDT", {})
+                raw_total = usdt_info.get("total")
+                raw_free = usdt_info.get("free")
+                equity += float(raw_total) if raw_total is not None else 0.0
+                free_margin += float(raw_free) if raw_free is not None else 0.0
 
-        # Insert snapshot
-        try:
-            supabase.table("account_snapshots").insert({
-                "equity_usdt": round(equity, 2),
-                "free_usdt": round(free_margin, 2),
-                "daily_pnl_usdt": round(daily_pnl, 2),
-                "daily_pnl_pct": round(daily_pnl_pct, 2),
-                "open_positions": active_positions_json
-            }).execute()
+                positions = binance_client.fetch_positions()
+                for p in positions:
+                    contracts = float(p.get("contracts", 0.0) or 0.0)
+                    if contracts > 0:
+                        raw_sym = p.get("symbol", "")
+                        active_positions_json.append({
+                            "symbol": to_canonical_symbol(raw_sym),
+                            "side": p.get("side"),
+                            "size": contracts,
+                            "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
+                            "mark_price": float(p.get("markPrice", 0.0) or 0.0),
+                            "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
+                            "leverage": p.get("leverage"),
+                            "exchange": "binance",
+                            "asset_class": "crypto"
+                        })
         except Exception as exc:
-            print(f"[telemetry] Snapshot insert notice: {exc}")
+            print(f"[telemetry] Binance sync notice: {exc}")
+
+    # 2. Bybit Telemetry
+    if mode in ("bybit", "dual") and bybit_client:
+        try:
+            if not sandbox and bybit_client.apiKey and bybit_client.secret:
+                b_bal = bybit_client.fetch_balance()
+                b_usdt = b_bal.get("USDT", {}) or b_bal.get("total", {})
+                b_total = b_usdt.get("total") if isinstance(b_usdt, dict) else None
+                b_free = b_usdt.get("free") if isinstance(b_usdt, dict) else None
+                if b_total is not None:
+                    equity += float(b_total)
+                if b_free is not None:
+                    free_margin += float(b_free)
+
+                b_positions = bybit_client.fetch_positions()
+                for p in b_positions:
+                    contracts = float(p.get("contracts", 0.0) or 0.0)
+                    if contracts > 0:
+                        raw_sym = p.get("symbol", "")
+                        is_fx = is_forex_symbol(raw_sym)
+                        active_positions_json.append({
+                            "symbol": to_canonical_symbol(raw_sym),
+                            "side": p.get("side"),
+                            "size": contracts,
+                            "entry_price": float(p.get("entryPrice", 0.0) or 0.0),
+                            "mark_price": float(p.get("markPrice", 0.0) or 0.0),
+                            "unrealized_pnl": float(p.get("unrealizedPnl", 0.0) or 0.0),
+                            "leverage": p.get("leverage"),
+                            "exchange": "bybit",
+                            "asset_class": "commodity" if ("XAU" in raw_sym or "XAG" in raw_sym) else ("forex" if is_fx else "crypto")
+                        })
+        except Exception as exc:
+            print(f"[telemetry] Bybit sync notice: {exc}")
+
+    # Calculate daily PnL from trades closed today (if table exists)
+    try:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        res = supabase.table("trade_executions").select("pnl_usdt").gte("closed_at", today_start).execute()
+        if res.data:
+            daily_pnl = sum([float(t.get("pnl_usdt") or 0.0) for t in res.data])
+            if equity > 0:
+                daily_pnl_pct = round((daily_pnl / equity) * 100.0, 2)
+    except Exception:
+        pass
+
+    # Insert snapshot
+    try:
+        supabase.table("account_snapshots").insert({
+            "equity_usdt": round(equity, 2),
+            "free_usdt": round(free_margin, 2),
+            "daily_pnl_usdt": round(daily_pnl, 2),
+            "daily_pnl_pct": round(daily_pnl_pct, 2),
+            "open_positions": active_positions_json
+        }).execute()
+    except Exception as exc:
+        print(f"[telemetry] Snapshot insert notice: {exc}")
 
     except Exception as exc:
         print(f"[telemetry] Sync notice: {exc}")
@@ -605,13 +775,15 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
 
 def manage_open_positions(
     supabase: Client,
-    exchange: ccxt.binanceusdm,
+    binance_client: ccxt.binanceusdm,
+    bybit_client: Optional[ccxt.bybit],
     deepseek_client: OpenAI,
     cfg: Dict[str, Any]
 ) -> None:
     """
-    Monitors active positions, updates MFE/MAE, executes +1.0R Break-Even & 50% Partial TP,
-    enforces Zombie Trade Time-Stop, and detects stop/target hits.
+    Monitors active positions across Binance and Bybit, updates MFE/MAE,
+    executes +1.0R Break-Even & 50% Partial TP, enforces Zombie Trade Time-Stop,
+    detects stop/target hits, and computes pip PnL for Forex/Commodities.
     """
     try:
         res = supabase.table("trade_executions").select("*").eq("status", "OPEN").execute()
@@ -622,6 +794,11 @@ def manage_open_positions(
         for t in open_trades:
             trade_id = t["id"]
             symbol = t["symbol"]
+            trade_exchange = t.get("exchange", "binance").lower()
+            exchange = bybit_client if trade_exchange == "bybit" and bybit_client else binance_client
+            if not exchange:
+                continue
+
             ex_sym = resolve_exchange_symbol(exchange, symbol)
             side = t["side"]
             entry = float(t["entry_price"])
@@ -656,13 +833,14 @@ def manage_open_positions(
                 cfg.get("enable_breakeven_partial", True) and 
                 not breakeven_activated):
 
-                partial_qty = round(qty * 0.5, 4)
-                new_remaining_qty = round(qty - partial_qty, 4)
+                is_fx = is_forex_symbol(symbol)
+                partial_qty = round(qty * 0.5, 2 if is_fx else (4 if qty < 10.0 else 2))
+                new_remaining_qty = round(qty - partial_qty, 2 if is_fx else (4 if qty < 10.0 else 2))
                 be_sl_price = round_price_dynamic(entry * 1.0015) if side == "LONG" else round_price_dynamic(entry * 0.9985)
                 new_sl_id = f"sim_be_sl_{int(time.time())}" if is_sim else None
 
                 if not is_sim:
-                    print(f"[trade_mgmt] +1.0R reached for {symbol} trade #{trade_id}. Executing 50% partial TP and moving SL to BE!")
+                    print(f"[trade_mgmt] +1.0R reached for {symbol} trade #{trade_id} ({trade_exchange}). Executing 50% partial TP and moving SL to BE!")
                     close_side = "sell" if side == "LONG" else "buy"
                     try:
                         exchange.create_market_order(
@@ -682,9 +860,10 @@ def manage_open_positions(
                             print(f"[trade_mgmt] Cancel old SL warning: {e}")
 
                     try:
+                        order_type = "STOP_MARKET" if trade_exchange == "binance" else "market"
                         new_sl_order = exchange.create_order(
                             symbol=ex_sym,
-                            type="STOP_MARKET",
+                            type=order_type,
                             side=close_side,
                             amount=new_remaining_qty,
                             params={
@@ -697,7 +876,7 @@ def manage_open_positions(
                     except Exception as e:
                         print(f"[trade_mgmt] Place BE SL warning: {e}")
                 else:
-                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +1.0R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${be_sl_price:.4f}!")
+                    print(f"[trade_mgmt] (ANALYTICAL SIGNAL) +1.0R reached for {symbol} trade #{trade_id}. Simulating 50% partial profit lock & moving SL to BE at ${format_price_dynamic(be_sl_price)}!")
 
                 # Update database record
                 supabase.table("trade_executions").update({
@@ -739,12 +918,18 @@ def manage_open_positions(
                 pnl_usdt = round((exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty, 2)
                 pnl_r = round(curr_r, 2)
 
+                pnl_pips = None
+                if is_forex_symbol(symbol):
+                    pip_sz = get_forex_pip_size(symbol)
+                    pnl_pips = round((exit_price - entry) / pip_sz if side == "LONG" else (entry - exit_price) / pip_sz, 1)
+
                 t_updated = {
                     **t,
                     "status": "TIME_STOP",
                     "exit_price": exit_price,
                     "pnl_usdt": pnl_usdt,
                     "pnl_r": pnl_r,
+                    "pnl_pips": pnl_pips,
                     "mfe_r": round(new_mfe, 2),
                     "mae_r": round(new_mae, 2),
                     "closed_at": datetime.now(timezone.utc).isoformat()
@@ -763,9 +948,15 @@ def manage_open_positions(
                 pnl_usdt = round((exit_price - entry) * qty if side == "LONG" else (entry - exit_price) * qty, 2)
                 pnl_r = round((exit_price - entry) / risk_dist if side == "LONG" else (entry - exit_price) / risk_dist, 2)
 
+                pnl_pips = None
+                if is_forex_symbol(symbol):
+                    pip_sz = get_forex_pip_size(symbol)
+                    pnl_pips = round((exit_price - entry) / pip_sz if side == "LONG" else (entry - exit_price) / pip_sz, 1)
+
                 sim_tag = "(ANALYTICAL SIGNAL) " if is_sim else ""
                 outcome_label = "WIN (WOULD HAVE WON)" if hit_tp else "LOSS (WOULD HAVE LOST)"
-                print(f"[trade_mgmt] {sim_tag}Trade #{trade_id} on {symbol} closed: {status} ({outcome_label}) at price {exit_price:.4f} (PnL: {pnl_usdt:+.2f} USDT, {pnl_r:+.2f}R)")
+                pip_info = f", {pnl_pips:+.1f} pips" if pnl_pips is not None else ""
+                print(f"[trade_mgmt] {sim_tag}Trade #{trade_id} on {symbol} closed: {status} ({outcome_label}) at price {format_price_dynamic(exit_price)} (PnL: {pnl_usdt:+.2f} USDT{pip_info}, {pnl_r:+.2f}R)")
 
                 if not is_sim:
                     try:
@@ -779,6 +970,7 @@ def manage_open_positions(
                     "exit_price": exit_price,
                     "pnl_usdt": pnl_usdt,
                     "pnl_r": pnl_r,
+                    "pnl_pips": pnl_pips,
                     "mfe_r": round(new_mfe, 2),
                     "mae_r": round(new_mae, 2),
                     "closed_at": datetime.now(timezone.utc).isoformat()
@@ -914,15 +1106,17 @@ _AUDITED_CANDLE_KEYS: Dict[str, float] = {}
 
 def scan_and_execute_signals(
     supabase: Client,
-    exchange: ccxt.binanceusdm,
+    binance_client: ccxt.binanceusdm,
+    bybit_client: Optional[ccxt.bybit],
     deepseek_client: OpenAI,
     cfg: Dict[str, Any],
     account_info: Dict[str, float]
 ) -> None:
     """
-    Scans watchlist symbols across active strategies, checks macro shield & funding rate,
+    Scans watchlist symbols across active strategies, checks macro shield & funding rate / spread,
     invokes DeepSeek Chief Quantitative Risk Officer with active guardrails,
-    sizes positions safely, and dispatches native server-side Binance orders.
+    sizes positions safely (pips for Forex, points for Crypto), and dispatches orders.
+    Supports 3 routing modes: Binance Only, Bybit Only, or Dual Mode.
     """
     global _SCAN_HEARTBEAT_COUNT
     _SCAN_HEARTBEAT_COUNT += 1
@@ -941,10 +1135,24 @@ def scan_and_execute_signals(
         print(f"[scanner] Current UTC hour ({current_utc_hour}) is blocked in bot_config. Skipping scan.")
         return
 
-    symbols = cfg.get("symbols") or [
-        "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
-        "DOGE/USDT", "ADA/USDT", "SUI/USDT", "LINK/USDT", "AVAX/USDT"
-    ]
+    exchange_mode = str(cfg.get("exchange_mode", "binance")).lower()
+    scan_targets: List[Tuple[str, str, Any]] = []
+
+    # 1. Binance Crypto
+    if exchange_mode in ("binance", "dual") and binance_client:
+        symbols = cfg.get("symbols") or [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+            "DOGE/USDT", "ADA/USDT", "SUI/USDT", "LINK/USDT", "AVAX/USDT"
+        ]
+        for s in symbols:
+            scan_targets.append((s, "binance", binance_client))
+
+    # 2. Bybit Forex / CFDs
+    if exchange_mode in ("bybit", "dual") and bybit_client and cfg.get("enable_forex_trading", True):
+        fx_symbols = cfg.get("forex_symbols") or ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"]
+        for s in fx_symbols:
+            scan_targets.append((s, "bybit", bybit_client))
+
     active_strats = cfg.get("active_strategies") or [
         "SMC_Liquidity_Sweep",
         "ICT_OrderBlock_FVG",
@@ -959,11 +1167,30 @@ def scan_and_execute_signals(
     # Detect if bot is running in Zero-Balance Analytical Mode
     is_zero_balance_mode = (equity <= 0) and not cfg.get("sandbox_mode", True)
     if is_zero_balance_mode and _SCAN_HEARTBEAT_COUNT % 4 == 1:
-        print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits. Candidate setups are paper-tracked without live margin orders.")
+        print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits across {exchange_mode.upper()} targets. Candidate setups are paper-tracked without live margin orders.")
 
-    for symbol in symbols:
+    for symbol, exchange_name, exchange in scan_targets:
         if symbol in quarantined_symbols:
             continue
+
+        is_fx = is_forex_symbol(symbol)
+        asset_class = "commodity" if ("XAU" in symbol or "XAG" in symbol) else ("forex" if is_fx else "crypto")
+
+        # Forex Safeguards: Weekend Shield & Rollover Blackout
+        if is_fx:
+            if cfg.get("forex_weekend_shield", True):
+                is_open, open_reason = is_forex_market_open()
+                if not is_open:
+                    if _SCAN_HEARTBEAT_COUNT % 6 == 1:
+                        print(f"[scanner] Forex market closed ({open_reason}). Weekend shield active.")
+                    continue
+
+            if cfg.get("forex_rollover_shield", True):
+                is_rollover, rollover_reason = is_daily_rollover_blackout()
+                if is_rollover:
+                    if _SCAN_HEARTBEAT_COUNT % 6 == 1:
+                        print(f"[scanner] Daily NY Bank Rollover Blackout: {rollover_reason}. Skipping new Forex entries.")
+                    continue
 
         ex_sym = resolve_exchange_symbol(exchange, symbol)
 
@@ -983,29 +1210,46 @@ def scan_and_execute_signals(
             latest_price = float(df["close"].iloc[-1])
             ind_df = calc_indicators(df)
 
-            # Check funding rate
+            # Check funding rate or spread
             funding_rate = 0.0
-            try:
-                fr_info = exchange.fetch_funding_rate(ex_sym)
-                funding_rate = float(fr_info.get("fundingRate", 0.0) or 0.0) * 100.0 # to percentage
-            except Exception:
-                funding_rate = 0.0
+            spread_pips = None
+            if not is_fx:
+                try:
+                    fr_info = exchange.fetch_funding_rate(ex_sym)
+                    funding_rate = float(fr_info.get("fundingRate", 0.0) or 0.0) * 100.0
+                except Exception:
+                    funding_rate = 0.0
 
-            if abs(funding_rate) > cfg.get("max_funding_rate_pct", 0.05):
-                print(f"[scanner] Skipping {symbol}: Funding rate {funding_rate:.4f}% exceeds max {cfg.get('max_funding_rate_pct')}%")
-                continue
+                if abs(funding_rate) > cfg.get("max_funding_rate_pct", 0.05):
+                    print(f"[scanner] Skipping {symbol}: Funding rate {funding_rate:.4f}% exceeds max {cfg.get('max_funding_rate_pct')}%")
+                    continue
+            else:
+                try:
+                    ticker = exchange.fetch_ticker(ex_sym)
+                    ask = float(ticker.get("ask", 0.0) or 0.0)
+                    bid = float(ticker.get("bid", 0.0) or 0.0)
+                    if ask > 0 and bid > 0:
+                        pip_sz = get_forex_pip_size(symbol)
+                        spread_pips = round(abs(ask - bid) / pip_sz, 1)
+                        max_spread = float(cfg.get("forex_max_spread_pips", 1.5) or 1.5)
+                        if spread_pips > max_spread:
+                            print(f"[scanner] Skipping {symbol}: Broker spread {spread_pips} pips exceeds max threshold {max_spread} pips.")
+                            continue
+                except Exception:
+                    pass
 
             # Fetch news headlines
-            headlines = fetch_crypto_headlines(symbol)
+            headlines = fetch_crypto_headlines(symbol) if not is_fx else []
 
             # Evaluate strategies
             candidate_setups = evaluate_enabled_strategies(df, active_strats, ind_df=ind_df)
             if not candidate_setups:
                 if _SCAN_HEARTBEAT_COUNT % 4 == 0:
-                    print(f"[scanner] {symbol} (${latest_price:,.2f}) -> 15m OHLCV checked across {len(active_strats)} quant strategies. No valid trigger on current bar. Actively monitoring...")
+                    unit_label = f"(${format_price_dynamic(latest_price)})"
+                    print(f"[scanner] {symbol} {unit_label} [{exchange_name.upper()}] -> 15m OHLCV checked across {len(active_strats)} quant strategies. No valid trigger on current bar. Monitoring...")
                 continue
 
-            print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} (Price: ${latest_price:,.2f})!")
+            print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} ({exchange_name.upper()}, Price: ${format_price_dynamic(latest_price)})!")
 
             for setup in candidate_setups:
                 rvol = setup.get("rvol", 1.0)
@@ -1046,17 +1290,20 @@ def scan_and_execute_signals(
                 active_lessons = [f"- {l['weakness_detected']}: {l['prompt_guardrail_rule']}" for l in (lessons_query.data or [])]
                 lessons_block = "\n".join(active_lessons) if active_lessons else "No active historical failure guardrails."
 
-                # Calculate HTF 24h trend alignment from 15m OHLCV bars (100 bars = 25 hours)
+                # Calculate HTF 24h trend alignment
                 ema_50_val = float(ind_df["ema_50"].iloc[-1]) if "ema_50" in ind_df.columns else latest_price
                 ema_20_val = float(ind_df["ema_20"].iloc[-1]) if "ema_20" in ind_df.columns else latest_price
                 h24 = float(df["high"].max())
                 l24 = float(df["low"].min())
-                htf_aligned = (latest_price > ema_50_val and side == "LONG") or (latest_price < ema_50_val and side == "SHORT")
                 htf_status = "BULLISH_TREND_ALIGNED" if (latest_price > ema_50_val and side == "LONG") else ("BEARISH_TREND_ALIGNED" if (latest_price < ema_50_val and side == "SHORT") else "COUNTER_TREND_OR_MEAN_REVERSION")
+
+                session_info = get_forex_session_regime() if is_fx else None
 
                 # DeepSeek Audit Prompt construction
                 audit_payload = {
                     "symbol": symbol,
+                    "exchange": exchange_name,
+                    "asset_class": asset_class,
                     "strategy_name": strat_name,
                     "proposed_direction": side,
                     "entry_price": setup["entry"],
@@ -1066,13 +1313,15 @@ def scan_and_execute_signals(
                     "setup_notes": setup["setup_notes"],
                     "relative_volume_rvol": rvol,
                     "funding_rate_pct": funding_rate,
+                    "broker_spread_pips": spread_pips,
+                    "forex_session_context": f"{session_info['session_name']} - {session_info['description']}" if session_info else "24/7 Continuous Crypto Market",
                     "htf_regime_context": f"24h HTF Regime: {htf_status} (Latest Close: {format_price_dynamic(latest_price)}, 24h EMA50: {format_price_dynamic(ema_50_val)}, EMA20: {format_price_dynamic(ema_20_val)}, 24h Range: [{format_price_dynamic(l24)} - {format_price_dynamic(h24)}])",
                     "latest_headlines": headlines,
                     "active_guardrail_lessons": lessons_block,
                     "macro_blackout_state": macro_status
                 }
 
-                print(f"[scanner] Requesting DeepSeek Audit for {symbol} {side} ({strat_name})...")
+                print(f"[scanner] Requesting DeepSeek Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()})...")
                 try:
                     response = deepseek_client.chat.completions.create(
                         model=cfg.get("deepseek_model", "deepseek-chat"),
@@ -1094,6 +1343,10 @@ def scan_and_execute_signals(
                 # Log to ai_audit_logs
                 supabase.table("ai_audit_logs").insert({
                     "symbol": symbol,
+                    "exchange": exchange_name,
+                    "asset_class": asset_class,
+                    "forex_session": session_info["session_name"] if session_info else None,
+                    "spread_pips": spread_pips,
                     "strategy_name": strat_name,
                     "proposed_direction": side,
                     "total_score": total_score,
@@ -1105,7 +1358,8 @@ def scan_and_execute_signals(
                         "sl": setup["sl"],
                         "tp": setup["tp"],
                         "rvol": rvol,
-                        "funding_rate": funding_rate
+                        "funding_rate": funding_rate,
+                        "spread_pips": spread_pips
                     },
                     "news_context": headlines
                 }).execute()
@@ -1116,23 +1370,30 @@ def scan_and_execute_signals(
                     print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score}, Veto: {veto_triggered} ({veto_reason})")
                     continue
 
-                # --- POSITION SIZING & BENCHMARK ALLOCATION ---
-                # Sizing tier: 60-79 = 0.5x risk; 80+ = 1.0x risk
+                # --- POSITION SIZING ---
                 size_multiplier = 1.0 if total_score >= 80 else 0.5
                 effective_risk_pct = risk_pct * size_multiplier
-                # If balance is zero, benchmark sizing against standard $10,000 reference equity ($100 risk at 1%)
                 nominal_equity = equity if equity > 0 else 10000.0
-                risk_usdt = nominal_equity * effective_risk_pct
-
                 entry_price = float(setup["entry"])
                 sl_price = float(setup["sl"])
                 tp_price = float(setup["tp"])
-                risk_per_unit = max(abs(entry_price - sl_price), 1e-8)
-                raw_qty = risk_usdt / risk_per_unit
-                position_qty = round(raw_qty, 2 if raw_qty >= 10.0 else (4 if raw_qty >= 0.01 else 6))
 
-                if position_qty <= 0:
-                    position_qty = 0.01
+                if is_fx:
+                    position_qty = calculate_forex_position_size(
+                        equity=nominal_equity,
+                        risk_pct=effective_risk_pct,
+                        entry_price=entry_price,
+                        sl_price=sl_price,
+                        symbol=symbol,
+                        max_leverage=int(cfg.get("forex_max_leverage", 30) or 30)
+                    )
+                else:
+                    risk_usdt = nominal_equity * effective_risk_pct
+                    risk_per_unit = max(abs(entry_price - sl_price), 1e-8)
+                    raw_qty = risk_usdt / risk_per_unit
+                    position_qty = round(raw_qty, 2 if raw_qty >= 10.0 else (4 if raw_qty >= 0.01 else 6))
+                    if position_qty <= 0:
+                        position_qty = 0.01
 
                 is_simulated = is_zero_balance_mode or cfg.get("sandbox_mode", True)
 
@@ -1144,33 +1405,32 @@ def scan_and_execute_signals(
                 tp_order_id = "mock_tp_1"
 
                 if is_simulated:
-                    mode_label = "ANALYTICAL SIGNAL (Zero-Balance Paper Tracking)" if is_zero_balance_mode else "SANDBOX DEMO"
-                    print(f"[execution] {mode_label} recorded for {symbol} {side}: Entry ${format_price_dynamic(entry_price)}, SL ${format_price_dynamic(sl_price)}, TP ${format_price_dynamic(tp_price)} (+{setup.get('rr', 2.0)}R), Score {total_score}/100")
+                    mode_label = f"ANALYTICAL SIGNAL ({exchange_name.upper()} Paper Tracking)" if is_zero_balance_mode else "SANDBOX DEMO"
+                    print(f"[execution] {mode_label} recorded for {symbol} {side} ({exchange_name.upper()}): Entry ${format_price_dynamic(entry_price)}, SL ${format_price_dynamic(sl_price)}, TP ${format_price_dynamic(tp_price)} (+{setup.get('rr', 2.0)}R), Score {total_score}/100")
                     exchange_order_id = f"ANALYTICS_{int(time.time())}"
                     sl_order_id = f"ANALYTICS_SL_{int(time.time())}"
                     tp_order_id = f"ANALYTICS_TP_{int(time.time())}"
                 else:
-                    print(f"[execution] Live Binance Futures Order Dispatch for {side} on {symbol}: Qty {position_qty}, Score {total_score}/100")
+                    print(f"[execution] Live {exchange_name.upper()} Order Dispatch for {side} on {symbol}: Qty {position_qty}, Score {total_score}/100")
                     try:
                         if cfg.get("use_limit_maker_entry", True):
-                            # Place Post-Only Limit Order
                             entry_order = exchange.create_order(
                                 symbol=ex_sym,
-                                type="LIMIT",
+                                type="LIMIT" if exchange_name == "binance" else "limit",
                                 side=order_side,
                                 amount=position_qty,
                                 price=entry_price,
-                                params={"timeInForce": "GTX"} # Post-Only Maker
+                                params={"timeInForce": "GTX"} if exchange_name == "binance" else {"postOnly": True}
                             )
                             exchange_order_id = str(entry_order.get("id"))
                         else:
                             entry_order = exchange.create_market_order(ex_sym, order_side, position_qty)
                             exchange_order_id = str(entry_order.get("id"))
 
-                        # Native Server-Side STOP_MARKET
+                        # Server-Side STOP_MARKET
                         sl_order = exchange.create_order(
                             symbol=ex_sym,
-                            type="STOP_MARKET",
+                            type="STOP_MARKET" if exchange_name == "binance" else "market",
                             side=opp_side,
                             amount=position_qty,
                             params={
@@ -1181,10 +1441,10 @@ def scan_and_execute_signals(
                         )
                         sl_order_id = str(sl_order.get("id"))
 
-                        # Native Server-Side TAKE_PROFIT_MARKET
+                        # Server-Side TAKE_PROFIT_MARKET
                         tp_order = exchange.create_order(
                             symbol=ex_sym,
-                            type="TAKE_PROFIT_MARKET",
+                            type="TAKE_PROFIT_MARKET" if exchange_name == "binance" else "market",
                             side=opp_side,
                             amount=position_qty,
                             params={
@@ -1196,7 +1456,7 @@ def scan_and_execute_signals(
                         tp_order_id = str(tp_order.get("id"))
 
                     except Exception as order_exc:
-                        print(f"[execution] Binance order submission fallback: {order_exc}")
+                        print(f"[execution] {exchange_name} order submission fallback: {order_exc}")
                         exchange_order_id = f"sim_{int(time.time())}"
                         sl_order_id = f"sim_sl_{int(time.time())}"
                         tp_order_id = f"sim_tp_{int(time.time())}"
@@ -1207,6 +1467,10 @@ def scan_and_execute_signals(
                     "sl_order_id": sl_order_id,
                     "tp_order_id": tp_order_id,
                     "symbol": symbol,
+                    "exchange": exchange_name,
+                    "asset_class": asset_class,
+                    "forex_session": session_info["session_name"] if session_info else None,
+                    "spread_at_entry": spread_pips,
                     "strategy_name": strat_name,
                     "side": side,
                     "initial_qty": position_qty,
@@ -1225,7 +1489,7 @@ def scan_and_execute_signals(
                         "rubric": rubric
                     },
                     "is_simulated": is_simulated,
-                    "trader_notes": "ANALYTICAL SIGNAL: Zero-Balance Paper Tracking (Live Market Simulation)" if is_zero_balance_mode else "",
+                    "trader_notes": f"ANALYTICAL SIGNAL: Zero-Balance Paper Tracking ({exchange_name.upper()})" if is_zero_balance_mode else "",
                     "emotion_or_grade": "A-Setup"
                 }
                 res = supabase.table("trade_executions").insert(new_trade_record).execute()
@@ -1235,7 +1499,7 @@ def scan_and_execute_signals(
                 notify_trade_opened(cfg, inserted_trade, {"total_score": total_score})
 
         except Exception as sym_err:
-            print(f"[scanner] Error processing {symbol}: {sym_err}")
+            print(f"[scanner] Error processing {symbol} on {exchange_name}: {sym_err}")
 
 
 # --- MASTER CONTINUOUS WORKER LOOP ---
@@ -1260,34 +1524,38 @@ def run_master_loop():
             iteration += 1
             # 1. Fetch latest configuration from Supabase
             cfg = fetch_bot_config(supabase)
-            exchange = get_binance_client(cfg)
+            binance_client = get_binance_client(cfg)
+            bybit_client = get_bybit_client(cfg)
             deepseek = get_deepseek_client(cfg)
 
             # 2. Check Emergency Panic Trigger
             if cfg.get("panic_close_all", False):
-                handle_panic_close_all(supabase, exchange, cfg)
+                handle_panic_close_all(supabase, binance_client, bybit_client, cfg)
                 time.sleep(poll_seconds)
                 continue
 
             # 3. Synchronize Account Telemetry
-            account_info = sync_account_telemetry(supabase, exchange, cfg)
+            account_info = sync_account_telemetry(supabase, binance_client, bybit_client, cfg)
 
             # 4. Institutional Trade Management
-            manage_open_positions(supabase, exchange, deepseek, cfg)
+            manage_open_positions(supabase, binance_client, bybit_client, deepseek, cfg)
 
             # 5. Statistical Optimizer (Run every 10 iterations)
             if iteration % 10 == 0:
                 run_statistical_optimizer(supabase, cfg)
 
             # 6. Synchronize Market & Macro News to Database (Every ~5 mins)
-            sync_market_and_macro_news(supabase, cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"]))
+            news_symbols = list(cfg.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"]))
+            if cfg.get("enable_forex_trading", True) and cfg.get("forex_symbols"):
+                news_symbols.extend(cfg.get("forex_symbols")[:3])
+            sync_market_and_macro_news(supabase, news_symbols)
 
             # 7. Signal Scanner (Only if bot is ACTIVE)
             if cfg.get("is_active", False):
-                scan_and_execute_signals(supabase, exchange, deepseek, cfg, account_info)
+                scan_and_execute_signals(supabase, binance_client, bybit_client, deepseek, cfg, account_info)
             else:
                 if iteration % 20 == 0:
-                    print("[bot] Engine is in PAUSED mode (is_active = False). Monitoring positions & telemetry only.")
+                    print(f"[bot] Engine is in PAUSED mode (is_active = False, mode: {cfg.get('exchange_mode', 'binance').upper()}). Monitoring positions & telemetry only.")
 
         except Exception as loop_exc:
             print(f"[bot] Critical loop exception: {loop_exc}")

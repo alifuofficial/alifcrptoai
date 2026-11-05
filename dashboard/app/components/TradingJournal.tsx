@@ -64,6 +64,11 @@ export interface JournalTradeRecord {
   fees_usdt?: number;
   opened_at: string;
   closed_at?: string | null;
+  exchange?: "binance" | "bybit" | string;
+  asset_class?: "crypto" | "forex" | "commodity" | string;
+  pnl_pips?: number | null;
+  spread_at_entry?: number | null;
+  forex_session?: string | null;
   // Joined from trade_autopsies via trading_journal_view
   failure_category?: string | null;
   root_cause_analysis?: string | null;
@@ -105,6 +110,7 @@ export default function TradingJournal({
   const [outcomeFilter, setOutcomeFilter] = useState<string>("ALL");
   const [sessionFilter, setSessionFilter] = useState<string>("ALL");
   const [modeFilter, setModeFilter] = useState<string>("ALL");
+  const [exchangeFilter, setExchangeFilter] = useState<"ALL" | "binance" | "bybit">("ALL");
 
   // Detailed Deep-Dive Modal Inspector
   const [inspectTrade, setInspectTrade] = useState<JournalTradeRecord | null>(null);
@@ -205,6 +211,12 @@ export default function TradingJournal({
       if (modeFilter === "LIVE" && isSim) return false;
       if (modeFilter === "ANALYTICAL" && !isSim) return false;
 
+      // Exchange Filter (Binance vs Bybit)
+      if (exchangeFilter !== "ALL") {
+        const tradeEx = (t.exchange || "binance").toLowerCase();
+        if (tradeEx !== exchangeFilter.toLowerCase()) return false;
+      }
+
       // Symbol Filter
       if (symbolFilter !== "ALL" && t.symbol !== symbolFilter) return false;
 
@@ -238,7 +250,7 @@ export default function TradingJournal({
 
       return true;
     });
-  }, [trades, symbolFilter, strategyFilter, outcomeFilter, sessionFilter, searchQuery, modeFilter]);
+  }, [trades, symbolFilter, strategyFilter, outcomeFilter, sessionFilter, searchQuery, modeFilter, exchangeFilter]);
 
   // ---------------------------------------------------------------------------
   // 3. TOP 5 INSTITUTIONAL KPIS
@@ -347,6 +359,8 @@ export default function TradingJournal({
 
     const headers = [
       "Trade ID",
+      "Exchange",
+      "Asset Class",
       "Date (UTC)",
       "Symbol",
       "Strategy",
@@ -357,6 +371,7 @@ export default function TradingJournal({
       "Stop Loss",
       "Take Profit",
       "PnL USDT",
+      "PnL Pips",
       "PnL R",
       "MFE R",
       "MAE R",
@@ -375,6 +390,8 @@ export default function TradingJournal({
 
     const rows = filteredTrades.map((t) => [
       t.id,
+      t.exchange || "binance",
+      t.asset_class || "crypto",
       t.opened_at,
       t.symbol,
       `"${t.strategy_name}"`,
@@ -385,6 +402,7 @@ export default function TradingJournal({
       t.stop_loss,
       t.take_profit,
       t.pnl_usdt ?? "",
+      t.pnl_pips ?? "",
       t.pnl_r ?? "",
       t.mfe_r ?? 0,
       t.mae_r ?? 0,
@@ -615,7 +633,18 @@ export default function TradingJournal({
           >
             <option value="ALL">All Modes (Live & Analytical)</option>
             <option value="ANALYTICAL">Analytical Signals (Paper)</option>
-            <option value="LIVE">Live Binance Only</option>
+            <option value="LIVE">Live Margin Execution</option>
+          </select>
+
+          {/* Exchange Filter (Binance vs Bybit) */}
+          <select
+            value={exchangeFilter}
+            onChange={(e) => setExchangeFilter(e.target.value as "ALL" | "binance" | "bybit")}
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-border rounded-lg text-textMain focus:outline-none font-medium cursor-pointer w-full sm:w-auto"
+          >
+            <option value="ALL">All Exchanges (Binance + Bybit)</option>
+            <option value="binance">Binance (Crypto USD-M)</option>
+            <option value="bybit">Bybit (Forex &amp; CFDs)</option>
           </select>
 
           {/* Symbol Filter */}
@@ -758,7 +787,18 @@ export default function TradingJournal({
 
                       {/* Symbol */}
                       <td className="py-3 px-4 font-bold text-textMain whitespace-nowrap">
-                        {trade.symbol}
+                        <div className="flex items-center gap-1.5">
+                          <span>{trade.symbol}</span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold font-mono uppercase ${
+                              (trade.exchange || "binance") === "bybit"
+                                ? "bg-amber-100 text-amber-800 border border-amber-200"
+                                : "bg-blue-100 text-blue-800 border border-blue-200"
+                            }`}
+                          >
+                            {(trade.exchange || "binance").toUpperCase()}
+                          </span>
+                        </div>
                       </td>
 
                       {/* Strategy Badge & Mode */}
@@ -767,6 +807,11 @@ export default function TradingJournal({
                           <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                             {trade.strategy_name?.replace(/_/g, " ")}
                           </span>
+                          {trade.asset_class === "forex" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                              FX
+                            </span>
+                          )}
                           {isSim ? (
                             <span
                               className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200"
@@ -777,7 +822,7 @@ export default function TradingJournal({
                           ) : (
                             <span
                               className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              title="Real Binance Margin Execution"
+                              title="Real Margin Execution"
                             >
                               LIVE
                             </span>
@@ -801,10 +846,16 @@ export default function TradingJournal({
                       {/* Entry / Exit */}
                       <td className="py-3 px-4 whitespace-nowrap tabular-nums">
                         <div className="font-semibold text-textMain">
-                          ${Number(trade.entry_price).toFixed(2)}
+                          {trade.asset_class === "forex"
+                            ? Number(trade.entry_price).toFixed(trade.entry_price < 2 ? 5 : 3)
+                            : `$${Number(trade.entry_price) < 0.01 ? Number(trade.entry_price).toFixed(6) : Number(trade.entry_price).toFixed(2)}`}
                         </div>
                         <div className="text-[11px] text-textMuted">
-                          {trade.exit_price ? `$${Number(trade.exit_price).toFixed(2)}` : "Live Position"}
+                          {trade.exit_price
+                            ? trade.asset_class === "forex"
+                              ? Number(trade.exit_price).toFixed(trade.exit_price < 2 ? 5 : 3)
+                              : `$${Number(trade.exit_price) < 0.01 ? Number(trade.exit_price).toFixed(6) : Number(trade.exit_price).toFixed(2)}`
+                            : "Live Position"}
                         </div>
                       </td>
 
@@ -834,6 +885,11 @@ export default function TradingJournal({
                                 {pnlR.toFixed(2)}R)
                               </span>
                             </div>
+                            {trade.pnl_pips != null && (
+                              <div className="text-[10px] text-amber-700 font-mono font-medium">
+                                {Number(trade.pnl_pips) >= 0 ? "+" : ""}{Number(trade.pnl_pips).toFixed(1)} pips
+                              </div>
+                            )}
                             {isSim && (
                               <div
                                 className={`text-[10px] font-semibold mt-0.5 ${

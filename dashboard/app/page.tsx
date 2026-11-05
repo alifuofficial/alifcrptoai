@@ -74,6 +74,7 @@ import {
   Check,
   BookOpen,
   LineChart,
+  Globe,
 } from "lucide-react";
 
 import LiveTradeChart from "./components/LiveTradeChart";
@@ -103,6 +104,16 @@ interface BotConfig {
   deepseek_base_url?: string | null;
   binance_api_key_override?: string | null;
   binance_secret_override?: string | null;
+  bybit_api_key_override?: string | null;
+  bybit_secret_override?: string | null;
+  exchange_mode?: "binance" | "bybit" | "dual";
+  enable_forex_trading?: boolean;
+  forex_symbols?: string[];
+  forex_max_leverage?: number;
+  forex_weekend_shield?: boolean;
+  forex_rollover_shield?: boolean;
+  forex_max_spread_pips?: number;
+  panic_close_target?: "ALL" | "CRYPTO" | "FOREX";
   deepseek_key_override?: string | null;
   telegram_token_override?: string | null;
   telegram_chat_id_override?: string | null;
@@ -138,6 +149,11 @@ interface TradeExecution {
   sl_order_id: string;
   tp_order_id: string;
   symbol: string;
+  exchange?: "binance" | "bybit";
+  asset_class?: "crypto" | "forex" | "commodity";
+  forex_session?: string | null;
+  pnl_pips?: number | null;
+  spread_at_entry?: number | null;
   strategy_name: string;
   side: "LONG" | "SHORT";
   initial_qty: number;
@@ -162,6 +178,11 @@ interface TradeExecution {
 interface AiAuditLog {
   id: number;
   symbol: string;
+  exchange?: string;
+  asset_class?: string;
+  forex_session?: string | null;
+  spread_pips?: number | null;
+  spread_at_entry?: number | null;
   strategy_name: string;
   proposed_direction: string;
   total_score: number;
@@ -260,6 +281,9 @@ export default function CommandCenterPage() {
   const [activeSection, setActiveSection] = useState<NavSection>("overview");
   const [chartTimeframe, setChartTimeframe] = useState<"24H" | "7D" | "30D" | "ALL">("ALL");
   const [showPanicModal, setShowPanicModal] = useState(false);
+  const [panicTarget, setPanicTarget] = useState<"ALL" | "CRYPTO" | "FOREX">("ALL");
+  const [selectedExchangeFilter, setSelectedExchangeFilter] = useState<"ALL" | "binance" | "bybit">("ALL");
+  const [auditExchangeFilter, setAuditExchangeFilter] = useState<"ALL" | "binance" | "bybit">("ALL");
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastNotification, setToastNotification] = useState<{
@@ -267,14 +291,92 @@ export default function CommandCenterPage() {
     type: "success" | "error" | "info";
   } | null>(null);
 
+  // World Session Clock Realtime Telemetry
+  const [utcClockStr, setUtcClockStr] = useState<string>("");
+  const [liveForexSession, setLiveForexSession] = useState<{
+    name: string;
+    isKillzone: boolean;
+    badgeClass: string;
+    description: string;
+  }>({
+    name: "CHECKING",
+    isKillzone: false,
+    badgeClass: "bg-slate-100 text-slate-600",
+    description: "Determining active market hours...",
+  });
+
+  useEffect(() => {
+    const updateSessionClock = () => {
+      const now = new Date();
+      const h = String(now.getUTCHours()).padStart(2, "0");
+      const m = String(now.getUTCMinutes()).padStart(2, "0");
+      const s = String(now.getUTCSeconds()).padStart(2, "0");
+      setUtcClockStr(`${h}:${m}:${s}`);
+
+      const day = now.getUTCDay();
+      const hour = now.getUTCHours();
+
+      // Weekend schedule: Friday 21:00 UTC to Sunday 22:00 UTC
+      if (day === 6 || (day === 5 && hour >= 21) || (day === 0 && hour < 22)) {
+        setLiveForexSession({
+          name: "WEEKEND CLOSED",
+          isKillzone: false,
+          badgeClass: "bg-rose-100 text-rose-800 border-rose-200",
+          description: "Forex market closed for the weekend (Opens Sun 22:00 UTC)",
+        });
+      } else if (hour >= 7 && hour < 11) {
+        setLiveForexSession({
+          name: "LONDON KILLZONE",
+          isKillzone: true,
+          badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-300",
+          description: "London Open (07:00-11:00 UTC): Prime Asian Range Liquidity Sweeps & Displacement",
+        });
+      } else if (hour >= 12 && hour < 16) {
+        setLiveForexSession({
+          name: "NY OVERLAP",
+          isKillzone: true,
+          badgeClass: "bg-blue-100 text-blue-800 border-blue-300",
+          description: "London + NY Overlap (12:00-16:00 UTC): Peak institutional volume & displacement",
+        });
+      } else if (hour >= 0 && hour < 7) {
+        setLiveForexSession({
+          name: "ASIAN SESSION",
+          isKillzone: false,
+          badgeClass: "bg-amber-100 text-amber-800 border-amber-200",
+          description: "Asian Session (00:00-07:00 UTC): Range-bound consolidation",
+        });
+      } else if (hour >= 16 && hour < 21) {
+        setLiveForexSession({
+          name: "NY AFTERNOON",
+          isKillzone: false,
+          badgeClass: "bg-indigo-100 text-indigo-800 border-indigo-200",
+          description: "New York Afternoon (16:00-21:00 UTC): London closed, momentum slowing",
+        });
+      } else {
+        setLiveForexSession({
+          name: "ROLLOVER RESET",
+          isKillzone: false,
+          badgeClass: "bg-purple-100 text-purple-800 border-purple-200",
+          description: "Daily Bank Rollover: Wide broker spreads, defensive posture",
+        });
+      }
+    };
+
+    updateSessionClock();
+    const timer = setInterval(updateSessionClock, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   // API Health Diagnostics State
   const [apiHealth, setApiHealth] = useState<{
     binance: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    bybit: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     deepseek: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     telegram: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     database: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
   }>({
     binance: { status: "idle" },
+    bybit: { status: "idle" },
     deepseek: { status: "idle" },
     telegram: { status: "idle" },
     database: { status: "idle" },
@@ -621,7 +723,7 @@ export default function CommandCenterPage() {
     setTimeout(() => setToastNotification(null), 4500);
   };
 
-  const testSingleApi = async (service: "binance" | "deepseek" | "telegram" | "database") => {
+  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "telegram" | "database") => {
     setApiHealth((prev) => ({
       ...prev,
       [service]: { status: "testing", message: "Connecting & verifying endpoint..." },
@@ -637,6 +739,11 @@ export default function CommandCenterPage() {
             binance: {
               apiKey: formSettings.binance_api_key_override,
               secret: formSettings.binance_secret_override,
+              sandbox: config?.sandbox_mode,
+            },
+            bybit: {
+              apiKey: formSettings.bybit_api_key_override,
+              secret: formSettings.bybit_secret_override,
               sandbox: config?.sandbox_mode,
             },
             deepseek: {
@@ -679,8 +786,9 @@ export default function CommandCenterPage() {
   const testAllApis = async () => {
     setIsTestingAll(true);
     setApiHealth({
-      binance: { status: "testing", message: "Testing gateway..." },
-      deepseek: { status: "testing", message: "Testing model..." },
+      binance: { status: "testing", message: "Testing Binance gateway..." },
+      bybit: { status: "testing", message: "Testing Bybit V5 gateway..." },
+      deepseek: { status: "testing", message: "Testing AI model..." },
       telegram: { status: "testing", message: "Testing alerts..." },
       database: { status: "testing", message: "Testing ledger..." },
     });
@@ -695,6 +803,11 @@ export default function CommandCenterPage() {
             binance: {
               apiKey: formSettings.binance_api_key_override,
               secret: formSettings.binance_secret_override,
+              sandbox: config?.sandbox_mode,
+            },
+            bybit: {
+              apiKey: formSettings.bybit_api_key_override,
+              secret: formSettings.bybit_secret_override,
               sandbox: config?.sandbox_mode,
             },
             deepseek: {
@@ -714,25 +827,28 @@ export default function CommandCenterPage() {
       const data = await res.json();
       if (data.results) {
         const b = data.results.binance;
+        const by = data.results.bybit;
         const d = data.results.deepseek;
         const t = data.results.telegram;
         const db = data.results.database;
 
         setApiHealth({
-          binance: { status: b.success ? "success" : "error", message: b.message, latency: b.latencyMs },
-          deepseek: { status: d.success ? "success" : "error", message: d.message, latency: d.latencyMs },
-          telegram: { status: t.success ? "success" : "error", message: t.message, latency: t.latencyMs },
-          database: { status: db.success ? "success" : "error", message: db.message, latency: db.latencyMs },
+          binance: { status: b?.success ? "success" : "error", message: b?.message, latency: b?.latencyMs },
+          bybit: { status: by?.success ? "success" : "error", message: by?.message, latency: by?.latencyMs },
+          deepseek: { status: d?.success ? "success" : "error", message: d?.message, latency: d?.latencyMs },
+          telegram: { status: t?.success ? "success" : "error", message: t?.message, latency: t?.latencyMs },
+          database: { status: db?.success ? "success" : "error", message: db?.message, latency: db?.latencyMs },
         });
 
         if (data.success) {
-          showToast("All trading APIs & services connected successfully!", "success");
+          showToast("All multi-asset trading APIs & services operational!", "success");
         } else {
           const failedServices = [
-            !b.success && "Binance",
-            !d.success && "AI Model",
-            !t.success && "Telegram",
-            !db.success && "Database",
+            !b?.success && "Binance",
+            !by?.success && "Bybit",
+            !d?.success && "AI Model",
+            !t?.success && "Telegram",
+            !db?.success && "Database",
           ].filter(Boolean).join(", ");
           showToast(`Issues detected on: ${failedServices}. Check credentials.`, "error");
         }
@@ -765,11 +881,15 @@ export default function CommandCenterPage() {
     }
   };
 
-  const triggerPanicCloseAll = async () => {
+  const triggerPanicCloseAll = async (target: "ALL" | "CRYPTO" | "FOREX" = panicTarget) => {
     setShowPanicModal(false);
-    const { error } = await supabase.from("bot_config").update({ panic_close_all: true, is_active: false }).eq("id", 1);
+    const { error } = await supabase.from("bot_config").update({
+      panic_close_all: true,
+      panic_close_target: target,
+      is_active: false,
+    }).eq("id", 1);
     if (!error) {
-      showToast("EMERGENCY FLATTEN DISPATCHED: Cancelling all orders & closing positions!");
+      showToast(`EMERGENCY FLATTEN DISPATCHED (${target}): Orders cancelled & positions closed!`, "success");
     }
   };
 
@@ -1128,13 +1248,42 @@ export default function CommandCenterPage() {
           <div className="w-full max-w-md rounded-lg border border-rose-200 bg-surface p-6 shadow-xl">
             <div className="flex items-center gap-3 text-rose-600 mb-3">
               <AlertOctagon className="h-6 w-6 animate-pulse" />
-              <h3 className="text-base font-bold text-textMain">Emergency Panic Flatten</h3>
+              <h3 className="text-base font-bold text-textMain">Emergency Circuit Breaker Flatten</h3>
             </div>
-            <p className="text-xs text-textMuted mb-6 leading-relaxed">
-              This will <strong>IMMEDIATELY CANCEL ALL CONDITIONAL ORDERS</strong> on Binance and execute
-              <strong> MARKET CLOSE</strong> on every active futures position, setting the bot state to <strong>PAUSED</strong>.
-              Are you sure you want to proceed?
+            <p className="text-xs text-textMuted mb-4 leading-relaxed">
+              Select the asset class and exchange target to immediately cancel all conditional orders and close open positions at Market:
             </p>
+
+            <div className="space-y-2 mb-5">
+              {[
+                { id: "ALL", label: "Flatten ALL Positions (Binance + Bybit)", desc: "Emergency shutdown across all crypto, forex & metals" },
+                { id: "CRYPTO", label: "Flatten Crypto Only (Binance USD-M)", desc: "Leaves Forex positions untouched" },
+                { id: "FOREX", label: "Flatten Forex Only (Bybit UTA V5)", desc: "Derisks Forex before weekend, leaves Crypto running" },
+              ].map((opt) => (
+                <label
+                  key={opt.id}
+                  onClick={() => setPanicTarget(opt.id as any)}
+                  className={`flex items-start gap-3 p-2.5 rounded-md border text-xs cursor-pointer transition-all ${
+                    panicTarget === opt.id
+                      ? "border-rose-500 bg-rose-50/70 text-rose-900 font-semibold"
+                      : "border-border bg-slate-50 text-textMain hover:bg-slate-100"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="panicTarget"
+                    checked={panicTarget === opt.id}
+                    onChange={() => setPanicTarget(opt.id as any)}
+                    className="mt-0.5 accent-rose-600"
+                  />
+                  <div>
+                    <span className="block">{opt.label}</span>
+                    <span className="text-[10px] text-textMuted font-normal block">{opt.desc}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+
             <div className="flex items-center justify-end gap-3">
               <button
                 onClick={() => setShowPanicModal(false)}
@@ -1143,10 +1292,10 @@ export default function CommandCenterPage() {
                 Cancel / Stand Down
               </button>
               <button
-                onClick={triggerPanicCloseAll}
+                onClick={() => triggerPanicCloseAll(panicTarget)}
                 className="rounded-md bg-rose-600 px-5 py-2 text-xs font-bold text-white hover:bg-rose-700 transition-all cursor-pointer"
               >
-                CONFIRM FLATTEN ALL
+                CONFIRM FLATTEN ({panicTarget})
               </button>
             </div>
           </div>
@@ -1438,6 +1587,30 @@ export default function CommandCenterPage() {
 
           {/* Status Toggles & Panic Button */}
           <div className="flex items-center space-x-1.5 sm:space-x-3 text-xs font-medium shrink-0">
+            {/* World Session Clock Widget */}
+            <div
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 border border-border bg-slate-50/90 rounded-md text-xs font-mono shadow-2xs"
+              title={liveForexSession.description}
+            >
+              <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="font-semibold text-textMain tabular-nums">{utcClockStr || "00:00:00"} UTC</span>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${liveForexSession.badgeClass}`}>
+                {liveForexSession.name}
+              </span>
+            </div>
+
+            {/* Exchange Operating Mode Indicator */}
+            <div className={`hidden sm:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
+              config?.exchange_mode === "dual"
+                ? "bg-purple-50 border-purple-200 text-purple-700"
+                : config?.exchange_mode === "bybit"
+                ? "bg-amber-50 border-amber-200 text-amber-700"
+                : "bg-blue-50 border-blue-200 text-blue-700"
+            }`}>
+              <Layers className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+              <span>{config?.exchange_mode === "dual" ? "DUAL (CRYPTO + FX)" : config?.exchange_mode === "bybit" ? "BYBIT (FOREX)" : "BINANCE (CRYPTO)"}</span>
+            </div>
+
             <button
               onClick={toggleBotActive}
               className={`flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer text-xs ${
@@ -1918,19 +2091,51 @@ export default function CommandCenterPage() {
               />
 
               {/* Positions Table Header */}
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-semibold tracking-tight">Institutional Positions Ledger</h2>
                   <p className="text-xs text-textMuted mt-0.5">
-                    Active server-side conditional trades protected on Binance Futures with trailing telemetry
+                    Active server-side conditional trades protected across Binance Futures and Bybit UTA with trailing telemetry
                   </p>
                 </div>
-                <button
-                  onClick={fetchAllData}
-                  className="flex items-center px-3 py-1.5 text-xs font-medium border border-border text-textMain hover:bg-slate-50 rounded transition-colors cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Refresh Orders
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Exchange Filter Pills */}
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-md text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedExchangeFilter("ALL")}
+                      className={`px-2.5 py-1 rounded font-medium transition-colors cursor-pointer ${
+                        selectedExchangeFilter === "ALL" ? "bg-white text-textMain shadow-2xs font-semibold" : "text-textMuted hover:text-textMain"
+                      }`}
+                    >
+                      All ({openTrades.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedExchangeFilter("binance")}
+                      className={`px-2.5 py-1 rounded font-medium transition-colors cursor-pointer ${
+                        selectedExchangeFilter === "binance" ? "bg-white text-brand-700 shadow-2xs font-semibold" : "text-textMuted hover:text-textMain"
+                      }`}
+                    >
+                      Binance ({openTrades.filter((t) => !t.exchange || t.exchange === "binance").length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedExchangeFilter("bybit")}
+                      className={`px-2.5 py-1 rounded font-medium transition-colors cursor-pointer ${
+                        selectedExchangeFilter === "bybit" ? "bg-white text-amber-700 shadow-2xs font-semibold" : "text-textMuted hover:text-textMain"
+                      }`}
+                    >
+                      Bybit FX ({openTrades.filter((t) => t.exchange === "bybit").length})
+                    </button>
+                  </div>
+                  <button
+                    onClick={fetchAllData}
+                    className="flex items-center px-3 py-1.5 text-xs font-medium border border-border text-textMain hover:bg-slate-50 rounded transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Refresh Orders
+                  </button>
+                </div>
               </div>
 
               {openTrades.length === 0 ? (
@@ -1938,15 +2143,16 @@ export default function CommandCenterPage() {
                   <Layers className="mx-auto h-8 w-8 text-slate-300 mb-2" />
                   <h4 className="text-sm font-semibold text-textMain">No Open Positions</h4>
                   <p className="text-xs text-textMuted mt-1">
-                    The autonomous bot is actively scanning 15m candles for SMC sweeps and EMA pullbacks.
+                    The autonomous bot is actively scanning 15m candles across Binance &amp; Bybit for institutional setups.
                   </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto bg-surface border border-border rounded-lg">
-                  <table className="w-full text-left text-xs min-w-[700px]">
+                  <table className="w-full text-left text-xs min-w-[750px]">
                     <thead className="border-b border-border bg-slate-50 text-textMuted uppercase font-semibold text-[10px] tracking-wider">
                       <tr>
                         <th className="py-3 px-4">Symbol / Strategy</th>
+                        <th className="py-3 px-4 text-center">Exchange / Asset</th>
                         <th className="py-3 px-4 text-center">Direction</th>
                         <th className="py-3 px-4 text-right">Entry Price</th>
                         <th className="py-3 px-4 text-right">Stop Loss</th>
@@ -1957,11 +2163,14 @@ export default function CommandCenterPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {openTrades.map((t) => {
+                      {openTrades
+                        .filter((t) => selectedExchangeFilter === "ALL" || (t.exchange || "binance") === selectedExchangeFilter)
+                        .map((t) => {
                         const isSim =
                           Boolean(t.is_simulated) ||
                           String(t.exchange_order_id || "").startsWith("ANALYTICS_") ||
                           String(t.exchange_order_id || "").startsWith("sim_");
+                        const isFx = t.asset_class === "forex" || t.asset_class === "commodity";
 
                         return (
                         <tr key={t.id} className="hover:bg-slate-50 transition-colors">
@@ -1978,7 +2187,7 @@ export default function CommandCenterPage() {
                               ) : (
                                 <span
                                   className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  title="Real Binance Margin Execution"
+                                  title="Live Margin Execution"
                                 >
                                   LIVE
                                 </span>
@@ -1987,10 +2196,22 @@ export default function CommandCenterPage() {
                             <div className="text-[10px] text-brand-600">{t.strategy_name}</div>
                           </td>
                           <td className="py-3.5 px-4 text-center">
+                            <div className="inline-flex flex-col items-center gap-0.5">
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                t.exchange === "bybit" ? "bg-amber-100 text-amber-800 border border-amber-200" : "bg-blue-100 text-blue-800 border border-blue-200"
+                              }`}>
+                                {t.exchange === "bybit" ? "BYBIT UTA" : "BINANCE"}
+                              </span>
+                              <span className="text-[9px] text-textMuted uppercase font-semibold">
+                                {t.asset_class || (isFx ? "FOREX" : "CRYPTO")}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
                             <span
                               className={`rounded px-2 py-0.5 text-[10px] font-bold border ${
                                 t.side === "LONG"
-                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                   : "bg-rose-50 text-rose-700 border-rose-200"
                               }`}
                             >
@@ -1998,13 +2219,13 @@ export default function CommandCenterPage() {
                             </span>
                           </td>
                           <td className="py-3.5 px-4 text-right text-textMain font-semibold tabular-nums">
-                            ${Number(t.entry_price).toFixed(4)}
+                            ${Number(t.entry_price).toFixed(isFx ? 4 : (Number(t.entry_price) < 1 ? 6 : 4))}
                           </td>
                           <td className="py-3.5 px-4 text-right text-rose-600 font-semibold tabular-nums">
-                            ${Number(t.stop_loss).toFixed(4)}
+                            ${Number(t.stop_loss).toFixed(isFx ? 4 : (Number(t.stop_loss) < 1 ? 6 : 4))}
                           </td>
                           <td className="py-3.5 px-4 text-right text-emerald-600 font-semibold tabular-nums">
-                            ${Number(t.take_profit).toFixed(4)}
+                            ${Number(t.take_profit).toFixed(isFx ? 4 : (Number(t.take_profit) < 1 ? 6 : 4))}
                           </td>
                           <td className="py-3.5 px-4 text-center tabular-nums">
                             <div className="font-semibold text-textMain">MFE: +{Number(t.mfe_r || 0).toFixed(2)}R</div>
@@ -2432,13 +2653,67 @@ export default function CommandCenterPage() {
                 </div>
               )}
 
+              {/* Exchange Filter Tabs for Audits */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-surface border border-border rounded-lg p-3">
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-lg border border-border">
+                  <button
+                    type="button"
+                    onClick={() => setAuditExchangeFilter("ALL")}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                      auditExchangeFilter === "ALL" ? "bg-white text-textMain shadow-xs" : "text-textMuted hover:text-textMain"
+                    }`}
+                  >
+                    All Audits ({recentAudits.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuditExchangeFilter("binance")}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                      auditExchangeFilter === "binance" ? "bg-white text-blue-700 shadow-xs" : "text-textMuted hover:text-textMain"
+                    }`}
+                  >
+                    Binance Crypto ({recentAudits.filter((a) => (a.exchange || "binance") === "binance").length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuditExchangeFilter("bybit")}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                      auditExchangeFilter === "bybit" ? "bg-white text-amber-700 shadow-xs" : "text-textMuted hover:text-textMain"
+                    }`}
+                  >
+                    Bybit Forex / CFDs ({recentAudits.filter((a) => a.exchange === "bybit").length})
+                  </button>
+                </div>
+                <span className="text-[11px] text-textMuted font-mono">
+                  Showing: {recentAudits.filter((a) => {
+                    if (auditExchangeFilter === "binance") return (a.exchange || "binance") === "binance";
+                    if (auditExchangeFilter === "bybit") return a.exchange === "bybit";
+                    return true;
+                  }).length} records
+                </span>
+              </div>
+
               {recentAudits.length === 0 ? (
                 <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">
                   Awaiting candidate strategy signals to initiate DeepSeek risk evaluations.
                 </div>
+              ) : recentAudits.filter((a) => {
+                if (auditExchangeFilter === "binance") return (a.exchange || "binance") === "binance";
+                if (auditExchangeFilter === "bybit") return a.exchange === "bybit";
+                return true;
+              }).length === 0 ? (
+                <div className="bg-surface border border-border rounded-lg p-12 text-center text-xs text-textMuted">
+                  No audits found for the selected exchange ({auditExchangeFilter.toUpperCase()}).
+                </div>
               ) : (
                 <div className="space-y-4">
-                  {recentAudits.map((audit) => {
+                  {recentAudits
+                    .filter((a) => {
+                      if (auditExchangeFilter === "binance") return (a.exchange || "binance") === "binance";
+                      if (auditExchangeFilter === "bybit") return a.exchange === "bybit";
+                      return true;
+                    })
+                    .map((audit) => {
                     const isVetoed = audit.veto_triggered || audit.total_score < (config?.min_score || 65);
                     const breakdown = audit.rubric_breakdown || {};
 
@@ -2450,7 +2725,7 @@ export default function CommandCenterPage() {
                         }`}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span
                               className={`rounded px-2.5 py-0.5 text-xs font-bold border ${
                                 audit.proposed_direction === "LONG"
@@ -2461,6 +2736,26 @@ export default function CommandCenterPage() {
                               {audit.proposed_direction}
                             </span>
                             <span className="font-semibold text-sm text-textMain">{audit.symbol}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase font-mono ${
+                              (audit.exchange || "binance") === "bybit"
+                                ? "bg-amber-100 text-amber-800 border border-amber-200"
+                                : "bg-blue-100 text-blue-800 border border-blue-200"
+                            }`}>
+                              {(audit.exchange || "binance").toUpperCase()}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700">
+                              {audit.asset_class === "forex" ? "FOREX" : audit.asset_class === "commodity" ? "COMMODITY" : "CRYPTO"}
+                            </span>
+                            {audit.forex_session && (
+                              <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded font-mono border border-amber-200">
+                                {audit.forex_session}
+                              </span>
+                            )}
+                            {audit.spread_at_entry != null && (
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                Spread: {Number(audit.spread_at_entry).toFixed(1)} pips
+                              </span>
+                            )}
                             <span className="text-xs text-brand-600 font-mono">({audit.strategy_name})</span>
                           </div>
 
@@ -2707,11 +3002,69 @@ export default function CommandCenterPage() {
               <div>
                 <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
                   <SlidersHorizontal className="h-5 w-5 text-brand-500" />
-                  <span>Risk, Execution &amp; API Settings Control</span>
+                  <span>Risk, Execution &amp; Multi-Exchange Settings Control</span>
                 </h2>
                 <p className="text-xs text-textMuted mt-0.5">
                   Quantitative risk parameters synchronized directly with Contabo VPS Python trading worker
                 </p>
+              </div>
+
+              {/* EXCHANGE OPERATING MODE SELECTOR */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-4 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-border">
+                  <div>
+                    <h3 className="text-sm font-semibold text-textMain flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-brand-500" />
+                      <span>Exchange Operating Mode</span>
+                    </h3>
+                    <p className="text-xs text-textMuted mt-0.5">
+                      Select target market execution engine: Binance USD-M Futures, Bybit Forex / CFDs, or Dual Mode
+                    </p>
+                  </div>
+                  <span className={`px-2.5 py-1 text-xs font-bold rounded-md uppercase font-mono ${
+                    (formSettings.exchange_mode || "binance") === "dual"
+                      ? "bg-purple-100 text-purple-800 border border-purple-200"
+                      : (formSettings.exchange_mode || "binance") === "bybit"
+                      ? "bg-amber-100 text-amber-800 border border-amber-200"
+                      : "bg-blue-100 text-blue-800 border border-blue-200"
+                  }`}>
+                    Active: {(formSettings.exchange_mode || "binance").toUpperCase()}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    { mode: "binance", title: "Binance Only (Crypto)", desc: "Scans USDT-M Perpetuals 24/7/365 with server-side limit maker orders.", badge: "Crypto" },
+                    { mode: "bybit", title: "Bybit Only (Forex/CFDs)", desc: "Scans Currencies & Gold 24/5 on Unified Trading Account (V5 API).", badge: "Forex & Gold" },
+                    { mode: "dual", title: "Dual Engine (Simultaneous)", desc: "Autonomous scanning across both Binance Crypto & Bybit Forex concurrently.", badge: "All Markets" },
+                  ].map((item) => {
+                    const isSelected = (formSettings.exchange_mode || "binance") === item.mode;
+                    return (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        onClick={() => setFormSettings({ ...formSettings, exchange_mode: item.mode as any })}
+                        className={`p-4 rounded-lg border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? "bg-brand-50/70 border-brand-500 shadow-xs ring-1 ring-brand-500/30"
+                            : "bg-surface border-border hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className={`text-xs font-bold ${isSelected ? "text-brand-700" : "text-textMain"}`}>
+                            {item.title}
+                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                            isSelected ? "bg-brand-100 text-brand-800" : "bg-slate-100 text-slate-600"
+                          }`}>
+                            {item.badge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-textMuted leading-snug">{item.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* API CONNECTIVITY & LIVE HEALTH MATRIX */}
@@ -2813,6 +3166,79 @@ export default function CommandCenterPage() {
                           <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
                         )}
                         <span>Test Binance API</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Service: Bybit V5 Unified (Forex / CFDs) */}
+                  <div className="p-4 rounded-md border border-border bg-slate-50/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-md bg-amber-600/10 border border-amber-600/20 flex items-center justify-center text-amber-700 font-bold text-xs">
+                          BY
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-textMain">Bybit UTA (Forex / CFDs)</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                                config?.sandbox_mode ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                              }`}
+                            >
+                              {config?.sandbox_mode ? "Testnet UTA" : "Live Bybit V5"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-textMuted mt-0.5 font-mono">
+                            {apiHealth.bybit.latency ? `⚡ ${apiHealth.bybit.latency}ms latency` : "Unified Trading Account V5"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Badge */}
+                      {apiHealth.bybit.status === "testing" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Testing
+                        </span>
+                      ) : apiHealth.bybit.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" /> Connected
+                        </span>
+                      ) : apiHealth.bybit.status === "error" ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                          <XCircle className="h-3 w-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          Not Tested
+                        </span>
+                      )}
+                    </div>
+
+                    {apiHealth.bybit.message && (
+                      <p
+                        className={`text-[11px] leading-relaxed p-2 rounded border ${
+                          apiHealth.bybit.status === "success"
+                            ? "bg-emerald-50/50 border-emerald-100 text-emerald-900"
+                            : apiHealth.bybit.status === "error"
+                            ? "bg-rose-50/50 border-rose-100 text-rose-900"
+                            : "bg-slate-100/50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {apiHealth.bybit.message}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("bybit")}
+                        disabled={apiHealth.bybit.status === "testing"}
+                        className="px-3 py-1 text-xs font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.bybit.status === "testing" && (
+                          <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                        )}
+                        <span>Test Bybit V5 API</span>
                       </button>
                     </div>
                   </div>
@@ -3284,6 +3710,167 @@ export default function CommandCenterPage() {
                 </div>
               </div>
 
+              {/* Watchlist Symbols (Forex & CFDs via Bybit UTA) */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-bold text-amber-700 uppercase tracking-wider flex items-center gap-2">
+                      <Globe className="h-4 w-4" />
+                      <span>Forex &amp; Commodity Watchlist (Bybit UTA V5)</span>
+                    </h3>
+                    <p className="text-[11px] text-textMuted mt-0.5">
+                      Currencies, Gold, and Silver traded 24/5 on Bybit Unified Trading Account
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY"],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-textMain rounded transition-colors"
+                    >
+                      Core Majors (3)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-amber-50 hover:bg-amber-100 text-amber-800 rounded transition-colors border border-amber-200"
+                    >
+                      G10 Majors (7)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFormSettings({
+                          ...formSettings,
+                          forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "XAU/USD", "XAG/USD"],
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] font-medium bg-amber-600 hover:bg-amber-700 text-white rounded transition-colors shadow-xs"
+                    >
+                      Majors + Gold (Recommended)
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  value={(formSettings.forex_symbols || []).join(", ")}
+                  onChange={(e) =>
+                    setFormSettings({
+                      ...formSettings,
+                      forex_symbols: e.target.value.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
+                    })
+                  }
+                  placeholder="EUR/USD, GBP/USD, USD/JPY, XAU/USD"
+                  className="w-full rounded-md border border-border bg-slate-50 py-2.5 px-4 text-xs text-textMain font-mono focus:border-amber-500 focus:bg-white focus:outline-hidden"
+                />
+                <div className="flex items-center justify-between text-[10px] text-textMuted">
+                  <span>Standard Forex pairs with slash formatting (never converted to USDT).</span>
+                  <span>Active count: <strong className="text-textMain font-semibold">{(formSettings.forex_symbols || []).length} pairs</strong></span>
+                </div>
+              </div>
+
+              {/* Forex Institutional Safeguards Card */}
+              <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-amber-700 uppercase tracking-wider flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    <span>Forex Institutional Safeguards &amp; Session Risk Rules</span>
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                    24/5 Regulated Protection
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-xs font-semibold text-textMain mb-1">
+                      Max Forex Spread Filter: <span className="text-amber-700 font-bold">{formSettings.forex_max_spread_pips ?? 3.0} pips</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="1.0"
+                      max="10.0"
+                      step="0.5"
+                      value={formSettings.forex_max_spread_pips ?? 3.0}
+                      onChange={(e) => setFormSettings({ ...formSettings, forex_max_spread_pips: parseFloat(e.target.value) })}
+                      className="w-full accent-amber-600 cursor-pointer"
+                    />
+                    <span className="text-[10px] text-textMuted">
+                      Rejects entries if live broker bid-ask spread exceeds this threshold (prevents rollover slippage).
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-textMain mb-1">
+                      Max Forex Leverage: <span className="text-amber-700 font-bold">{formSettings.forex_max_leverage ?? 20}x</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="50"
+                      step="1"
+                      value={formSettings.forex_max_leverage ?? 20}
+                      onChange={(e) => setFormSettings({ ...formSettings, forex_max_leverage: parseInt(e.target.value) })}
+                      className="w-full accent-amber-600 cursor-pointer"
+                    />
+                    <span className="text-[10px] text-textMuted">
+                      Upper leverage limit for currency/metal margin orders on Bybit UTA (standard: 20x-30x).
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-border">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formSettings.enable_forex_trading ?? true}
+                      onChange={(e) => setFormSettings({ ...formSettings, enable_forex_trading: e.target.checked })}
+                      className="h-4 w-4 rounded border-border text-amber-600 focus:ring-0"
+                    />
+                    <div>
+                      <span className="text-xs font-medium text-textMain block">Enable Forex Scanning</span>
+                      <span className="text-[10px] text-textMuted">Activates Bybit currency engine</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formSettings.forex_weekend_shield ?? true}
+                      onChange={(e) => setFormSettings({ ...formSettings, forex_weekend_shield: e.target.checked })}
+                      className="h-4 w-4 rounded border-border text-amber-600 focus:ring-0"
+                    />
+                    <div>
+                      <span className="text-xs font-medium text-textMain block">Weekend Shield (Auto-Close)</span>
+                      <span className="text-[10px] text-textMuted">Flattens FX Friday 21:00 UTC</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formSettings.forex_rollover_shield ?? true}
+                      onChange={(e) => setFormSettings({ ...formSettings, forex_rollover_shield: e.target.checked })}
+                      className="h-4 w-4 rounded border-border text-amber-600 focus:ring-0"
+                    />
+                    <div>
+                      <span className="text-xs font-medium text-textMain block">NY Rollover Blackout</span>
+                      <span className="text-[10px] text-textMuted">Blocks entries 21:50–22:15 UTC</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               {/* Dynamic AI Base URL & Routing */}
               <div className="bg-surface border border-border rounded-lg p-6 space-y-4">
                 <div className="flex items-center justify-between">
@@ -3485,6 +4072,93 @@ export default function CommandCenterPage() {
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                         >
                           {showSecretKeys["binance_secret_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub-Group: Bybit UTA Credentials */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-600"></span>
+                      <span>Bybit UTA V5 API Credentials (Forex &amp; CFDs)</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("bybit")}
+                      disabled={apiHealth.bybit.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.bybit.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Check className="h-3 w-3 text-amber-600" />
+                      )}
+                      <span>Test Bybit</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Bybit V5 API Key</label>
+                      <div className="relative">
+                        <input
+                          type={showSecretKeys["bybit_api_key_override"] ? "text" : "password"}
+                          value={formSettings.bybit_api_key_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, bybit_api_key_override: e.target.value })
+                          }
+                          placeholder="••••••••••••••••"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              bybit_api_key_override: !showSecretKeys["bybit_api_key_override"],
+                            })
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showSecretKeys["bybit_api_key_override"] ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-textMain mb-1">Bybit V5 Secret</label>
+                      <div className="relative">
+                        <input
+                          type={showSecretKeys["bybit_secret_override"] ? "text" : "password"}
+                          value={formSettings.bybit_secret_override || ""}
+                          onChange={(e) =>
+                            setFormSettings({ ...formSettings, bybit_secret_override: e.target.value })
+                          }
+                          placeholder="••••••••••••••••"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecretKeys({
+                              ...showSecretKeys,
+                              bybit_secret_override: !showSecretKeys["bybit_secret_override"],
+                            })
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showSecretKeys["bybit_secret_override"] ? (
                             <EyeOff className="h-4 w-4" />
                           ) : (
                             <Eye className="h-4 w-4" />

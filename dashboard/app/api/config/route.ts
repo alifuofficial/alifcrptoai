@@ -61,6 +61,16 @@ export async function GET() {
       quarantined_symbols: [],
       deepseek_model: "deepseek-chat",
       deepseek_base_url: "https://api.deepseek.com",
+      exchange_mode: "binance",
+      bybit_api_key_override: null,
+      bybit_secret_override: null,
+      enable_forex_trading: true,
+      forex_symbols: ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"],
+      forex_max_leverage: 30,
+      forex_weekend_shield: true,
+      forex_rollover_shield: true,
+      forex_max_spread_pips: 1.5,
+      panic_close_target: "ALL",
       panic_close_all: false,
     };
 

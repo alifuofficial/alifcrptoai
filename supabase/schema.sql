@@ -38,10 +38,20 @@ CREATE TABLE IF NOT EXISTS bot_config (
     deepseek_base_url TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
     binance_api_key_override TEXT DEFAULT NULL,
     binance_secret_override TEXT DEFAULT NULL,
+    bybit_api_key_override TEXT DEFAULT NULL,
+    bybit_secret_override TEXT DEFAULT NULL,
+    exchange_mode TEXT NOT NULL DEFAULT 'binance' CHECK (exchange_mode IN ('binance', 'bybit', 'dual')),
+    enable_forex_trading BOOLEAN NOT NULL DEFAULT true,
+    forex_symbols TEXT[] NOT NULL DEFAULT ARRAY['EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'XAU/USD'],
+    forex_max_leverage INT NOT NULL DEFAULT 30,
+    forex_weekend_shield BOOLEAN NOT NULL DEFAULT true,
+    forex_rollover_shield BOOLEAN NOT NULL DEFAULT true,
+    forex_max_spread_pips NUMERIC NOT NULL DEFAULT 1.5,
     deepseek_key_override TEXT DEFAULT NULL,
     telegram_token_override TEXT DEFAULT NULL,
     telegram_chat_id_override TEXT DEFAULT NULL,
     panic_close_all BOOLEAN NOT NULL DEFAULT false,
+    panic_close_target TEXT NOT NULL DEFAULT 'ALL' CHECK (panic_close_target IN ('ALL', 'CRYPTO', 'FOREX')),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -67,6 +77,8 @@ CREATE INDEX IF NOT EXISTS idx_account_snapshots_created_at
 -- 3. AI AUDIT LOGS TABLE
 CREATE TABLE IF NOT EXISTS ai_audit_logs (
     id BIGSERIAL PRIMARY KEY,
+    exchange TEXT NOT NULL DEFAULT 'binance',
+    asset_class TEXT NOT NULL DEFAULT 'crypto',
     symbol TEXT NOT NULL,
     strategy_name TEXT NOT NULL,
     proposed_direction TEXT NOT NULL,
@@ -76,6 +88,8 @@ CREATE TABLE IF NOT EXISTS ai_audit_logs (
     rubric_breakdown JSONB NOT NULL DEFAULT '{}'::JSONB,
     market_snapshot JSONB NOT NULL DEFAULT '{}'::JSONB,
     news_context JSONB NOT NULL DEFAULT '{}'::JSONB,
+    forex_session TEXT DEFAULT NULL,
+    spread_pips NUMERIC DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -87,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_audit_logs_symbol_strat
 -- 4. TRADE EXECUTIONS TABLE
 CREATE TABLE IF NOT EXISTS trade_executions (
     id BIGSERIAL PRIMARY KEY,
+    exchange TEXT NOT NULL DEFAULT 'binance' CHECK (exchange IN ('binance', 'bybit')),
+    asset_class TEXT NOT NULL DEFAULT 'crypto' CHECK (asset_class IN ('crypto', 'forex', 'commodity')),
     exchange_order_id TEXT,
     sl_order_id TEXT,
     tp_order_id TEXT,
@@ -105,6 +121,9 @@ CREATE TABLE IF NOT EXISTS trade_executions (
     ),
     pnl_usdt NUMERIC,
     pnl_r NUMERIC,
+    pnl_pips NUMERIC,
+    spread_at_entry NUMERIC,
+    forex_session TEXT,
     mfe_r NUMERIC NOT NULL DEFAULT 0,
     mae_r NUMERIC NOT NULL DEFAULT 0,
     funding_rate_at_entry NUMERIC,
