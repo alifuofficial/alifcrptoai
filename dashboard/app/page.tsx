@@ -4578,7 +4578,24 @@ export default function CommandCenterPage() {
                             : "bg-surface border-border text-textMuted hover:bg-slate-100"
                         }`}
                       >
-                        🇸🇬 Singapore DashScope (Lowest Bybit Latency)
+                        🇸🇬 Singapore DashScope / Qwen Cloud
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormSettings({
+                            ...formSettings,
+                            qwen_base_url: "https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1",
+                            qwen_model: "qwen3.7-flash",
+                          })
+                        }
+                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                          (formSettings.qwen_base_url || "").includes("qwencloudapi")
+                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                        }`}
+                      >
+                        ⚡ QwenCloud Direct (ap-southeast-1)
                       </button>
                       <button
                         type="button"
@@ -4949,15 +4966,15 @@ export default function CommandCenterPage() {
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-textMain">
-                        DashScope API Key (sk-...)
+                        Qwen Cloud / DashScope API Key (sk-...)
                       </label>
                       <a
-                        href="https://bailian.console.alibabacloud.com/"
+                        href="https://www.qwencloud.com/"
                         target="_blank"
                         rel="noreferrer"
                         className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-medium"
                       >
-                        <span>Get Alibaba Cloud DashScope Key &rarr;</span>
+                        <span>Get Official Key at Qwen Cloud (qwencloud.com) &rarr;</span>
                       </a>
                     </div>
                     <div className="relative">
