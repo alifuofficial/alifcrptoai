@@ -35,6 +35,12 @@ interface GeminiTestOptions {
   model?: string;
 }
 
+interface QwenTestOptions {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+}
+
 interface TelegramTestOptions {
   token?: string;
   chatId?: string;
@@ -625,6 +631,112 @@ async function testGemini(options?: GeminiTestOptions) {
   }
 }
 
+async function testQwen(options?: QwenTestOptions) {
+  const start = Date.now();
+  let apiKey = options?.apiKey?.trim();
+  let baseUrl = options?.baseUrl?.trim() || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+  let model = options?.model?.trim() || "qwen3.7-flash";
+
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+
+  if (!apiKey) {
+    try {
+      const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfg) {
+        apiKey = cfg.qwen_api_key_override || process.env.QWEN_API_KEY;
+        if (cfg.qwen_base_url) baseUrl = cfg.qwen_base_url;
+        if (cfg.qwen_model) model = cfg.qwen_model;
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  if (!apiKey) {
+    return {
+      success: false,
+      service: "qwen",
+      message: "No Qwen API Key provided. Enter your Alibaba DashScope or OpenRouter API key.",
+      configured: false,
+      latencyMs: 0,
+      model,
+      baseUrl,
+    };
+  }
+
+  let endpoint = baseUrl.replace(/\/+$/, "");
+  if (!endpoint.endsWith("/chat/completions")) {
+    endpoint = `${endpoint}/chat/completions`;
+  }
+
+  try {
+    const isSpecialRouter = baseUrl.includes("openrouter.ai");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    };
+    if (isSpecialRouter) {
+      headers["HTTP-Referer"] = "https://alifcrptoai.local";
+      headers["X-Title"] = "alifcrptoai Quantitative Trader";
+    }
+
+    const aiRes = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a quantitative trading auditor ping test." },
+          { role: "user", content: "Reply with the single word: READY" },
+        ],
+        max_tokens: 15,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const latencyMs = Date.now() - start;
+    const aiData = await aiRes.json();
+
+    if (!aiRes.ok) {
+      const errMsg = aiData?.error?.message || aiData?.message || `HTTP ${aiRes.status}`;
+      return {
+        success: false,
+        service: "qwen",
+        message: `Qwen Endpoint Error (${aiRes.status}): ${errMsg}`,
+        latencyMs,
+        model,
+        baseUrl,
+        configured: true,
+      };
+    }
+
+    const reply = aiData.choices?.[0]?.message?.content?.trim() || "READY";
+
+    return {
+      success: true,
+      service: "qwen",
+      message: `Qwen Quant Analyst Connected! Model '${model}' responded "${reply}" (${latencyMs}ms)`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+      reply,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    return {
+      success: false,
+      service: "qwen",
+      message: `Qwen Endpoint Unreachable: ${err.message}`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+    };
+  }
+}
+
 async function testTelegram(options?: TelegramTestOptions) {
   const start = Date.now();
   let token = options?.token?.trim();
@@ -791,6 +903,11 @@ export async function POST(req: Request) {
       return NextResponse.json(result);
     }
 
+    if (service === "qwen") {
+      const result = await testQwen(params.qwen);
+      return NextResponse.json(result);
+    }
+
     if (service === "telegram") {
       const result = await testTelegram(params.telegram);
       return NextResponse.json(result);
@@ -802,16 +919,17 @@ export async function POST(req: Request) {
     }
 
     // Default: Test all services
-    const [binanceRes, bybitRes, deepseekRes, geminiRes, telegramRes, dbRes] = await Promise.all([
+    const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, telegramRes, dbRes] = await Promise.all([
       testBinance(params.binance),
       testBybit(params.bybit),
       testDeepSeek(params.deepseek),
       testGemini(params.gemini),
+      testQwen(params.qwen),
       testTelegram(params.telegram),
       testDatabase(),
     ]);
 
-    const allSuccessful = binanceRes.success && (deepseekRes.success || geminiRes.success) && telegramRes.success && dbRes.success;
+    const allSuccessful = binanceRes.success && (deepseekRes.success || geminiRes.success || qwenRes.success) && telegramRes.success && dbRes.success;
 
     return NextResponse.json({
       success: allSuccessful,
@@ -821,6 +939,7 @@ export async function POST(req: Request) {
         bybit: bybitRes,
         deepseek: deepseekRes,
         gemini: geminiRes,
+        qwen: qwenRes,
         telegram: telegramRes,
         database: dbRes,
       },
@@ -837,23 +956,25 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const [binanceRes, bybitRes, deepseekRes, geminiRes, telegramRes, dbRes] = await Promise.all([
+  const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, telegramRes, dbRes] = await Promise.all([
     testBinance(),
     testBybit(),
     testDeepSeek(),
     testGemini(),
+    testQwen(),
     testTelegram(),
     testDatabase(),
   ]);
 
   return NextResponse.json({
-    success: binanceRes.success && (deepseekRes.success || geminiRes.success) && telegramRes.success && dbRes.success,
+    success: binanceRes.success && (deepseekRes.success || geminiRes.success || qwenRes.success) && telegramRes.success && dbRes.success,
     service: "all",
     results: {
       binance: binanceRes,
       bybit: bybitRes,
       deepseek: deepseekRes,
       gemini: geminiRes,
+      qwen: qwenRes,
       telegram: telegramRes,
       database: dbRes,
     },

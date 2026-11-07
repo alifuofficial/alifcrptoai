@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS bot_config (
     forex_rollover_shield BOOLEAN NOT NULL DEFAULT true,
     forex_max_spread_pips NUMERIC NOT NULL DEFAULT 3.5,
     deepseek_key_override TEXT DEFAULT NULL,
+    gemini_api_key_override TEXT DEFAULT NULL,
+    gemini_model TEXT NOT NULL DEFAULT 'gemini-3.5-flash',
+    qwen_api_key_override TEXT DEFAULT NULL,
+    qwen_base_url TEXT DEFAULT 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    qwen_model TEXT DEFAULT 'qwen3.7-flash',
+    target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5,
     telegram_token_override TEXT DEFAULT NULL,
     telegram_chat_id_override TEXT DEFAULT NULL,
     panic_close_all BOOLEAN NOT NULL DEFAULT false,
@@ -87,6 +93,10 @@ CREATE TABLE IF NOT EXISTS ai_audit_logs (
     veto_triggered BOOLEAN NOT NULL DEFAULT false,
     veto_reason TEXT DEFAULT NULL,
     rubric_breakdown JSONB NOT NULL DEFAULT '{}'::JSONB,
+    gemini_report JSONB NOT NULL DEFAULT '{}'::JSONB,
+    qwen_report JSONB NOT NULL DEFAULT '{}'::JSONB,
+    deepseek_report JSONB NOT NULL DEFAULT '{}'::JSONB,
+    council_scores JSONB NOT NULL DEFAULT '{}'::JSONB,
     market_snapshot JSONB NOT NULL DEFAULT '{}'::JSONB,
     news_context JSONB NOT NULL DEFAULT '{}'::JSONB,
     forex_session TEXT DEFAULT NULL,
@@ -414,9 +424,16 @@ BEGIN
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS deepseek_base_url TEXT DEFAULT 'https://api.deepseek.com';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'deepseek';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_api_key_override TEXT DEFAULT NULL;
-    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT 'gemini-3.5-flash';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_api_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_base_url TEXT DEFAULT 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_model TEXT DEFAULT 'qwen3.7-flash';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5;
     ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
+    ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS gemini_report JSONB DEFAULT '{}'::JSONB;
+    ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS qwen_report JSONB DEFAULT '{}'::JSONB;
+    ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS deepseek_report JSONB DEFAULT '{}'::JSONB;
+    ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS council_scores JSONB DEFAULT '{}'::JSONB;
     ALTER TABLE trade_autopsies ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
 
     -- Ensure singleton row (id = 1) exists

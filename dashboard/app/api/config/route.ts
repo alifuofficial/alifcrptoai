@@ -42,6 +42,7 @@ export async function GET() {
       bybit_secret_override: maskSecret(cfg.bybit_secret_override),
       deepseek_key_override: maskKey(cfg.deepseek_key_override),
       gemini_api_key_override: maskKey(cfg.gemini_api_key_override),
+      qwen_api_key_override: maskKey(cfg.qwen_api_key_override),
       telegram_token_override: maskKey(cfg.telegram_token_override),
     });
 
@@ -51,6 +52,15 @@ export async function GET() {
         ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"].includes(existing.gemini_model)
       ) {
         existing.gemini_model = "gemini-3.5-flash";
+      }
+      if (!existing.qwen_base_url) {
+        existing.qwen_base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+      }
+      if (!existing.qwen_model) {
+        existing.qwen_model = "qwen3.7-flash";
+      }
+      if (!existing.ai_provider || existing.ai_provider === "deepseek" || existing.ai_provider === "auto") {
+        existing.ai_provider = "council_3model";
       }
       if (!existing.forex_max_spread_pips || Number(existing.forex_max_spread_pips) <= 1.5) {
         existing.forex_max_spread_pips = 3.5;
@@ -97,9 +107,12 @@ export async function GET() {
       quarantined_symbols: [],
       deepseek_model: "deepseek-chat",
       deepseek_base_url: "https://api.deepseek.com",
-      ai_provider: "deepseek",
+      ai_provider: "council_3model",
       gemini_api_key_override: null,
-      gemini_model: "gemini-3.1-flash-lite",
+      gemini_model: "gemini-3.5-flash",
+      qwen_api_key_override: null,
+      qwen_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      qwen_model: "qwen3.7-flash",
       exchange_mode: "binance",
       bybit_api_key_override: null,
       bybit_secret_override: null,
@@ -169,6 +182,7 @@ export async function POST(req: Request) {
       "bybit_secret_override",
       "deepseek_key_override",
       "gemini_api_key_override",
+      "qwen_api_key_override",
       "telegram_token_override",
     ];
     for (const key of secretKeys) {
@@ -219,6 +233,7 @@ export async function POST(req: Request) {
       bybit_secret_override: maskSecret(saved.bybit_secret_override),
       deepseek_key_override: maskKey(saved.deepseek_key_override),
       gemini_api_key_override: maskKey(saved.gemini_api_key_override),
+      qwen_api_key_override: maskKey(saved.qwen_api_key_override),
       telegram_token_override: maskKey(saved.telegram_token_override),
     };
 

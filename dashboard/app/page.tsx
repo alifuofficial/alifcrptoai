@@ -117,9 +117,12 @@ interface BotConfig {
   forex_rollover_shield?: boolean;
   forex_max_spread_pips?: number;
   panic_close_target?: "ALL" | "CRYPTO" | "FOREX";
-  ai_provider?: "deepseek" | "gemini" | "auto";
+  ai_provider?: "council_3model" | "deepseek" | "gemini" | "auto";
   gemini_api_key_override?: string | null;
   gemini_model?: string;
+  qwen_api_key_override?: string | null;
+  qwen_base_url?: string;
+  qwen_model?: string;
   deepseek_key_override?: string | null;
   telegram_token_override?: string | null;
   telegram_chat_id_override?: string | null;
@@ -196,6 +199,10 @@ interface AiAuditLog {
   veto_triggered: boolean;
   veto_reason?: string | null;
   rubric_breakdown: any;
+  gemini_report?: any;
+  qwen_report?: any;
+  deepseek_report?: any;
+  council_scores?: any;
   market_snapshot: any;
   news_context: any;
   created_at: string;
@@ -419,6 +426,7 @@ export default function CommandCenterPage() {
     bybit: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     deepseek: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     gemini: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    qwen: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     telegram: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     database: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
   }>({
@@ -426,6 +434,7 @@ export default function CommandCenterPage() {
     bybit: { status: "idle" },
     deepseek: { status: "idle" },
     gemini: { status: "idle" },
+    qwen: { status: "idle" },
     telegram: { status: "idle" },
     database: { status: "idle" },
   });
@@ -771,7 +780,7 @@ export default function CommandCenterPage() {
     setTimeout(() => setToastNotification(null), 4500);
   };
 
-  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "gemini" | "telegram" | "database") => {
+  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "gemini" | "qwen" | "telegram" | "database") => {
     setApiHealth((prev) => ({
       ...prev,
       [service]: { status: "testing", message: "Connecting & verifying endpoint..." },
@@ -802,6 +811,11 @@ export default function CommandCenterPage() {
             gemini: {
               apiKey: formSettings.gemini_api_key_override,
               model: formSettings.gemini_model || "gemini-3.5-flash",
+            },
+            qwen: {
+              baseUrl: formSettings.qwen_base_url,
+              apiKey: formSettings.qwen_api_key_override,
+              model: formSettings.qwen_model || "qwen3.7-flash",
             },
             telegram: {
               token: formSettings.telegram_token_override,
@@ -842,6 +856,7 @@ export default function CommandCenterPage() {
       bybit: { status: "testing", message: "Testing Bybit V5 gateway..." },
       deepseek: { status: "testing", message: "Testing AI model..." },
       gemini: { status: "testing", message: "Testing Google Gemini..." },
+      qwen: { status: "testing", message: "Testing Qwen Quant..." },
       telegram: { status: "testing", message: "Testing alerts..." },
       database: { status: "testing", message: "Testing ledger..." },
     });
@@ -872,6 +887,11 @@ export default function CommandCenterPage() {
               apiKey: formSettings.gemini_api_key_override,
               model: formSettings.gemini_model || "gemini-3.5-flash",
             },
+            qwen: {
+              baseUrl: formSettings.qwen_base_url,
+              apiKey: formSettings.qwen_api_key_override,
+              model: formSettings.qwen_model || "qwen3.7-flash",
+            },
             telegram: {
               token: formSettings.telegram_token_override,
               chatId: formSettings.telegram_chat_id_override,
@@ -887,6 +907,7 @@ export default function CommandCenterPage() {
         const by = data.results.bybit;
         const d = data.results.deepseek;
         const g = data.results.gemini;
+        const q = data.results.qwen;
         const t = data.results.telegram;
         const db = data.results.database;
 
@@ -895,6 +916,7 @@ export default function CommandCenterPage() {
           bybit: { status: by?.success ? "success" : "error", message: by?.message, latency: by?.latencyMs },
           deepseek: { status: d?.success ? "success" : "error", message: d?.message, latency: d?.latencyMs },
           gemini: { status: g?.success ? "success" : "error", message: g?.message, latency: g?.latencyMs },
+          qwen: { status: q?.success ? "success" : "error", message: q?.message, latency: q?.latencyMs },
           telegram: { status: t?.success ? "success" : "error", message: t?.message, latency: t?.latencyMs },
           database: { status: db?.success ? "success" : "error", message: db?.message, latency: db?.latencyMs },
         });
@@ -1002,9 +1024,12 @@ export default function CommandCenterPage() {
         forex_weekend_shield: Boolean(formSettings.forex_weekend_shield ?? true),
         forex_rollover_shield: Boolean(formSettings.forex_rollover_shield ?? true),
         forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.5),
-        ai_provider: formSettings.ai_provider || "deepseek",
+        ai_provider: formSettings.ai_provider || "council_3model",
         gemini_api_key_override: formSettings.gemini_api_key_override?.trim() || null,
         gemini_model: formSettings.gemini_model || "gemini-3.5-flash",
+        qwen_api_key_override: formSettings.qwen_api_key_override?.trim() || null,
+        qwen_base_url: formSettings.qwen_base_url || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        qwen_model: formSettings.qwen_model || "qwen3.7-flash",
         deepseek_key_override: formSettings.deepseek_key_override?.trim() || null,
         telegram_token_override: formSettings.telegram_token_override?.trim() || null,
         telegram_chat_id_override: formSettings.telegram_chat_id_override?.trim() || null,
@@ -1798,14 +1823,24 @@ export default function CommandCenterPage() {
 
             {/* AI Provider Indicator */}
             <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
-              config?.ai_provider === "gemini"
+              (config?.ai_provider || "council_3model") === "council_3model"
+                ? "bg-purple-50 border-purple-200 text-purple-700"
+                : config?.ai_provider === "gemini"
                 ? "bg-blue-50 border-blue-200 text-blue-700"
                 : config?.ai_provider === "auto"
                 ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                 : "bg-indigo-50 border-indigo-200 text-indigo-700"
             }`}>
               <Cpu className="w-3.5 h-3.5 mr-1.5 shrink-0" />
-              <span>{config?.ai_provider === "gemini" ? "GEMINI (FREE)" : config?.ai_provider === "auto" ? "HYBRID (DS+GEMINI)" : "DEEPSEEK"}</span>
+              <span>{
+                (config?.ai_provider || "council_3model") === "council_3model"
+                  ? "🏛️ 3-MODEL COUNCIL"
+                  : config?.ai_provider === "gemini"
+                  ? "GEMINI (FREE)"
+                  : config?.ai_provider === "auto"
+                  ? "HYBRID (DS+GEMINI)"
+                  : "DEEPSEEK"
+              }</span>
             </div>
 
             <button
@@ -2989,57 +3024,154 @@ export default function CommandCenterPage() {
                           </div>
                         )}
 
-                        <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-textMuted uppercase">HTF Regime</div>
-                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                              {breakdown.htf_regime?.score ?? 0} / 25
-                            </div>
-                            <div className="text-[10px] text-textMuted truncate mt-1">
-                              {breakdown.htf_regime?.flaw_or_deduction || "Aligned"}
-                            </div>
-                          </div>
+                        {audit.council_scores ? (
+                          <div className="mt-4 space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                              {/* Pillar 1: Gemini Chartist */}
+                              <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3.5 space-y-2">
+                                <div className="flex items-center justify-between border-b border-blue-200/60 pb-1.5">
+                                  <span className="font-bold text-blue-900 flex items-center gap-1.5">
+                                    <span>📊</span> 1. Gemini Chartist
+                                  </span>
+                                  <span className="font-mono font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded text-xs">
+                                    {audit.council_scores.gemini ?? 0} / 40 pts
+                                  </span>
+                                </div>
+                                <div className="space-y-1 text-[11px] text-blue-950">
+                                  <div className="flex justify-between">
+                                    <span className="text-blue-700 font-medium">HTF Structure:</span>
+                                    <span className="font-mono font-bold">{audit.gemini_report?.htf_regime?.score ?? 0}/20</span>
+                                  </div>
+                                  {audit.gemini_report?.htf_regime?.flaw_or_deduction && (
+                                    <p className="text-[10px] text-blue-800 italic">{audit.gemini_report.htf_regime.flaw_or_deduction}</p>
+                                  )}
+                                  <div className="flex justify-between pt-1">
+                                    <span className="text-blue-700 font-medium">LTF Location:</span>
+                                    <span className="font-mono font-bold">{audit.gemini_report?.ltf_location?.score ?? 0}/20</span>
+                                  </div>
+                                  {audit.gemini_report?.ltf_location?.flaw_or_deduction && (
+                                    <p className="text-[10px] text-blue-800 italic">{audit.gemini_report.ltf_location.flaw_or_deduction}</p>
+                                  )}
+                                  {audit.gemini_report?.chart_verdict && (
+                                    <p className="text-[10px] text-blue-900 font-medium pt-1 border-t border-blue-100">{audit.gemini_report.chart_verdict}</p>
+                                  )}
+                                </div>
+                              </div>
 
-                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-textMuted uppercase">LTF Location</div>
-                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                              {breakdown.ltf_location?.score ?? 0} / 25
-                            </div>
-                            <div className="text-[10px] text-textMuted truncate mt-1">
-                              {breakdown.ltf_location?.flaw_or_deduction || "Verified"}
-                            </div>
-                          </div>
+                              {/* Pillar 2: Qwen Quant & Macro */}
+                              <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3.5 space-y-2">
+                                <div className="flex items-center justify-between border-b border-amber-200/60 pb-1.5">
+                                  <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                                    <span>⚡</span> 2. Qwen Quant &amp; Macro
+                                  </span>
+                                  <span className="font-mono font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded text-xs">
+                                    {audit.council_scores.qwen ?? 0} / 30 pts
+                                  </span>
+                                </div>
+                                <div className="space-y-1 text-[11px] text-amber-950">
+                                  <div className="flex justify-between">
+                                    <span className="text-amber-700 font-medium">Momentum &amp; RVOL:</span>
+                                    <span className="font-mono font-bold">{audit.qwen_report?.momentum_volume?.score ?? 0}/10</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-amber-700 font-medium">USD Macro Blackout:</span>
+                                    <span className="font-mono font-bold">{audit.qwen_report?.news_catalyst?.score ?? 0}/10</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-amber-700 font-medium">Intermarket (BTC/DXY):</span>
+                                    <span className="font-mono font-bold">{audit.qwen_report?.intermarket_tide?.score ?? 0}/10</span>
+                                  </div>
+                                  {audit.qwen_report?.quant_summary && (
+                                    <p className="text-[10px] text-amber-900 font-medium pt-1 border-t border-amber-100">{audit.qwen_report.quant_summary}</p>
+                                  )}
+                                </div>
+                              </div>
 
-                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-textMuted uppercase">Momentum &amp; Vol</div>
-                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                              {breakdown.momentum_volume?.score ?? 0} / 15
-                            </div>
-                            <div className="text-[10px] text-textMuted truncate mt-1">
-                              {breakdown.momentum_volume?.flaw_or_deduction || "Clean"}
+                              {/* Pillar 3: DeepSeek Chief Risk Officer */}
+                              <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3.5 space-y-2">
+                                <div className="flex items-center justify-between border-b border-indigo-200/60 pb-1.5">
+                                  <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                                    <span>🛡️</span> 3. DeepSeek CRO Judge
+                                  </span>
+                                  <span className="font-mono font-bold text-indigo-700 bg-indigo-100/80 px-2 py-0.5 rounded text-xs">
+                                    {audit.council_scores.deepseek ?? 0} / 30 pts
+                                  </span>
+                                </div>
+                                <div className="space-y-1 text-[11px] text-indigo-950">
+                                  <div className="flex justify-between">
+                                    <span className="text-indigo-700 font-medium">Risk &amp; Execution Audit:</span>
+                                    <span className="font-mono font-bold">{audit.deepseek_report?.risk_audit?.score ?? 0}/30</span>
+                                  </div>
+                                  {audit.deepseek_report?.risk_audit?.flaw_or_deduction && (
+                                    <p className="text-[10px] text-indigo-800 italic">{audit.deepseek_report.risk_audit.flaw_or_deduction}</p>
+                                  )}
+                                  {audit.deepseek_report?.debate && (
+                                    <div className="pt-1.5 space-y-1 border-t border-indigo-100 text-[10px]">
+                                      <div className="text-rose-700">
+                                        <strong className="font-semibold">🐻 Devil&apos;s Advocate:</strong> {audit.deepseek_report.debate.bearish_devils_advocate}
+                                      </div>
+                                      <div className="text-emerald-700">
+                                        <strong className="font-semibold">🐂 Defense:</strong> {audit.deepseek_report.debate.bullish_defense}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           </div>
+                        ) : (
+                          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                              <div className="text-[10px] font-bold text-textMuted uppercase">HTF Regime</div>
+                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                {breakdown.htf_regime?.score ?? 0} / 25
+                              </div>
+                              <div className="text-[10px] text-textMuted truncate mt-1">
+                                {breakdown.htf_regime?.flaw_or_deduction || "Aligned"}
+                              </div>
+                            </div>
 
-                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-textMuted uppercase">News Catalyst</div>
-                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                              {breakdown.news_catalyst?.score ?? 0} / 20
+                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                              <div className="text-[10px] font-bold text-textMuted uppercase">LTF Location</div>
+                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                {breakdown.ltf_location?.score ?? 0} / 25
+                              </div>
+                              <div className="text-[10px] text-textMuted truncate mt-1">
+                                {breakdown.ltf_location?.flaw_or_deduction || "Verified"}
+                              </div>
                             </div>
-                            <div className="text-[10px] text-textMuted truncate mt-1">
-                              {breakdown.news_catalyst?.flaw_or_deduction || "Neutral"}
-                            </div>
-                          </div>
 
-                          <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                            <div className="text-[10px] font-bold text-textMuted uppercase">Intermarket Tide</div>
-                            <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                              {breakdown.intermarket_tide?.score ?? 0} / 15
+                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                              <div className="text-[10px] font-bold text-textMuted uppercase">Momentum &amp; Vol</div>
+                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                {breakdown.momentum_volume?.score ?? 0} / 15
+                              </div>
+                              <div className="text-[10px] text-textMuted truncate mt-1">
+                                {breakdown.momentum_volume?.flaw_or_deduction || "Clean"}
+                              </div>
                             </div>
-                            <div className="text-[10px] text-textMuted truncate mt-1">
-                              {breakdown.intermarket_tide?.flaw_or_deduction || "BTC Flow"}
+
+                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                              <div className="text-[10px] font-bold text-textMuted uppercase">News Catalyst</div>
+                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                {breakdown.news_catalyst?.score ?? 0} / 20
+                              </div>
+                              <div className="text-[10px] text-textMuted truncate mt-1">
+                                {breakdown.news_catalyst?.flaw_or_deduction || "Neutral"}
+                              </div>
+                            </div>
+
+                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                              <div className="text-[10px] font-bold text-textMuted uppercase">Intermarket Tide</div>
+                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                {breakdown.intermarket_tide?.score ?? 0} / 15
+                              </div>
+                              <div className="text-[10px] text-textMuted truncate mt-1">
+                                {breakdown.intermarket_tide?.flaw_or_deduction || "BTC Flow"}
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })}
@@ -4081,9 +4213,9 @@ export default function CommandCenterPage() {
                       </label>
                       <div className="flex items-center gap-1">
                         {[
-                          { label: "2.0 pips", val: 2.0 },
-                          { label: "3.5 pips (Bybit)", val: 3.5 },
-                          { label: "5.0 pips", val: 5.0 },
+                          { label: "2.5 pips (Strict FX)", val: 2.5 },
+                          { label: "3.5 pips (Bybit Standard)", val: 3.5 },
+                          { label: "5.0 pips (Metals & Volatile)", val: 5.0 },
                         ].map((preset) => (
                           <button
                             key={preset.val}
@@ -4110,7 +4242,7 @@ export default function CommandCenterPage() {
                       className="w-full accent-amber-600 cursor-pointer"
                     />
                     <span className="text-[10px] text-textMuted">
-                      Rejects entries if live broker spread exceeds this. Standard on Bybit order book is 2.0 - 3.5 pips. Recommended: <strong>3.5 pips</strong>.
+                      Rejects entries if live broker spread exceeds this. On Bybit, USD/JPY floating spread is typically 2.0–3.0 pips; Silver (XAG/USD) is ~2.0 pips. Recommended: <strong>3.5 pips</strong>.
                     </span>
                   </div>
 
@@ -4183,17 +4315,24 @@ export default function CommandCenterPage() {
                     <span>AI Risk Officer Model &amp; Routing Engine</span>
                   </h3>
                   <p className="text-xs text-textMuted mt-1">
-                    Toggle your Chief Quantitative Risk Officer between DeepSeek, Google Gemini (Free Tier), or Auto-Fallback mode.
+                    Select your AI Audit architecture: the flagship 3-Model AI Council (Gemini + Qwen + DeepSeek), single-model DeepSeek / Gemini, or Auto-Fallback mode.
                   </p>
                 </div>
 
-                {/* 3-Way AI Provider Selector */}
+                {/* AI Provider Selector */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-textMain">
                     Active AI Model Provider
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     {[
+                      {
+                        id: "council_3model",
+                        title: "🏛️ 3-Model AI Council",
+                        desc: "Gemini (Chartist /40) + Qwen (Quant /30) + DeepSeek (Risk /30) parallel consensus",
+                        badge: "Flagship Consensus",
+                        color: "border-purple-500 bg-purple-50/50 text-purple-900"
+                      },
                       {
                         id: "deepseek",
                         title: "DeepSeek V3 / R1",
@@ -4212,11 +4351,11 @@ export default function CommandCenterPage() {
                         id: "auto",
                         title: "Auto-Fallback (Hybrid)",
                         desc: "DeepSeek primary -> Automatic instant Gemini backup on 402 or balance outage",
-                        badge: "Recommended Shield",
+                        badge: "Shield",
                         color: "border-emerald-500 bg-emerald-50/50 text-emerald-900"
                       }
                     ].map((opt) => {
-                      const isSel = (formSettings.ai_provider || "deepseek") === opt.id;
+                      const isSel = (formSettings.ai_provider || "council_3model") === opt.id;
                       return (
                         <div
                           key={opt.id}
@@ -4242,13 +4381,13 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* DeepSeek Sub-Settings (Shown if 'deepseek' or 'auto') */}
-                {((formSettings.ai_provider || "deepseek") === "deepseek" || formSettings.ai_provider === "auto") && (
+                {/* DeepSeek Sub-Settings (Shown if 'deepseek', 'auto', or 'council_3model') */}
+                {((formSettings.ai_provider || "council_3model") === "deepseek" || formSettings.ai_provider === "auto" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
                   <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                        DeepSeek Endpoint Configuration
+                        DeepSeek (Chief Quantitative Risk Officer &amp; Judge) Configuration
                       </span>
                       <button
                         type="button"
@@ -4318,13 +4457,13 @@ export default function CommandCenterPage() {
                   </div>
                 )}
 
-                {/* Google Gemini Sub-Settings (Shown if 'gemini' or 'auto') */}
-                {((formSettings.ai_provider || "deepseek") === "gemini" || formSettings.ai_provider === "auto") && (
+                {/* Google Gemini Sub-Settings (Shown if 'gemini', 'auto', or 'council_3model') */}
+                {((formSettings.ai_provider || "council_3model") === "gemini" || formSettings.ai_provider === "auto" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
                   <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                        Google Gemini (Free Tier) Configuration
+                        Google Gemini (Top-Down Price Action Chartist) Configuration
                       </span>
                       <button
                         type="button"
@@ -4376,6 +4515,88 @@ export default function CommandCenterPage() {
                           </button>
                         );
                       })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Alibaba Qwen Sub-Settings (Shown if 'council_3model') */}
+                {(formSettings.ai_provider || "council_3model") === "council_3model" && (
+                  <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        Alibaba Qwen (Quant Microstructure, RVOL &amp; Macro Analyst) Configuration
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => testSingleApi("qwen")}
+                        disabled={apiHealth.qwen.status === "testing"}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        {apiHealth.qwen.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-amber-600" />}
+                        <span>Test Qwen</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-textMain mb-1">Qwen Base URL</label>
+                        <input
+                          type="text"
+                          value={formSettings.qwen_base_url || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}
+                          onChange={(e) => setFormSettings({ ...formSettings, qwen_base_url: e.target.value })}
+                          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-textMain mb-1">Qwen Model Identifier</label>
+                        <input
+                          type="text"
+                          value={formSettings.qwen_model || "qwen3.7-flash"}
+                          onChange={(e) => setFormSettings({ ...formSettings, qwen_model: e.target.value })}
+                          placeholder="qwen3.7-flash"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-textMuted font-medium">Quick Presets:</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormSettings({
+                            ...formSettings,
+                            qwen_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                            qwen_model: "qwen3.7-flash",
+                          })
+                        }
+                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                          (formSettings.qwen_base_url || "").includes("dashscope-intl")
+                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                        }`}
+                      >
+                        🇸🇬 Singapore DashScope (Lowest Bybit Latency)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormSettings({
+                            ...formSettings,
+                            qwen_base_url: "https://openrouter.ai/api/v1",
+                            qwen_model: "qwen/qwen-2.5-72b-instruct",
+                          })
+                        }
+                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                          (formSettings.qwen_base_url || "").includes("openrouter.ai")
+                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                        }`}
+                      >
+                        🌐 OpenRouter (Global Fallback)
+                      </button>
                     </div>
                   </div>
                 )}
@@ -4703,7 +4924,76 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* Sub-Group 4: Telegram Alert Credentials */}
+                {/* Sub-Group 4: Alibaba Qwen AI Credentials (Quant & Macro Analyst) */}
+                <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                      <span>Alibaba Qwen API Key (Singapore DashScope / OpenRouter)</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => testSingleApi("qwen")}
+                      disabled={apiHealth.qwen.status === "testing"}
+                      className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {apiHealth.qwen.status === "testing" ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                      ) : (
+                        <Check className="h-3 w-3 text-amber-600" />
+                      )}
+                      <span>Test Qwen Key</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-textMain">
+                        DashScope API Key (sk-...)
+                      </label>
+                      <a
+                        href="https://bailian.console.alibabacloud.com/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-medium"
+                      >
+                        <span>Get Alibaba Cloud DashScope Key &rarr;</span>
+                      </a>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showSecretKeys["qwen_api_key_override"] ? "text" : "password"}
+                        value={formSettings.qwen_api_key_override || ""}
+                        onChange={(e) =>
+                          setFormSettings({ ...formSettings, qwen_api_key_override: e.target.value })
+                        }
+                        placeholder="sk-••••••••••••••••••••••••••••••••"
+                        className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowSecretKeys({
+                            ...showSecretKeys,
+                            qwen_api_key_override: !showSecretKeys["qwen_api_key_override"],
+                          })
+                        }
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showSecretKeys["qwen_api_key_override"] ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-textMuted mt-1 block">
+                      Powers Role 2: Quantitative Microstructure, Relative Volume (RVOL), Funding Rates, and USD Red-Folder Macro Blackout auditing.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sub-Group 5: Telegram Alert Credentials */}
                 <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-textMain flex items-center gap-2">

@@ -85,7 +85,15 @@ from notifier import (
     notify_strategy_quarantined,
     notify_panic_activated
 )
-from prompts import SYSTEM_AUDIT_PROMPT, AUTOPSY_PROMPT
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from prompts import (
+    GEMINI_CHARTIST_SYSTEM_PROMPT,
+    QWEN_QUANT_MACRO_SYSTEM_PROMPT,
+    DEEPSEEK_CHIEF_JUDGE_SYSTEM_PROMPT,
+    DEEPSEEK_AUTOPSY_SYSTEM_PROMPT,
+    SYSTEM_AUDIT_PROMPT,
+    AUTOPSY_PROMPT,
+)
 
 # Load local environment if available
 load_dotenv()
@@ -390,10 +398,11 @@ def get_bybit_client(cfg: Dict[str, Any]) -> ccxt.bybit:
 
 def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
     """
-    Returns an OpenAI-compatible client configured for the selected provider ('deepseek' or 'gemini'),
+    Returns an OpenAI-compatible client configured for the selected provider ('deepseek', 'gemini', or 'qwen'),
     along with the resolved model name.
     """
-    if provider == "gemini":
+    prov = str(provider).strip().lower()
+    if prov == "gemini":
         gemini_key = cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY", "")
         gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
         # Auto-upgrade deprecated / retired model identifiers
@@ -404,6 +413,15 @@ def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
         return client, gemini_model
+    elif prov == "qwen":
+        qwen_key = cfg.get("qwen_api_key_override") or os.getenv("QWEN_API_KEY", "")
+        qwen_base_url = cfg.get("qwen_base_url") or os.getenv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+        qwen_model = cfg.get("qwen_model") or os.getenv("QWEN_MODEL", "qwen3.7-flash")
+        client = OpenAI(
+            api_key=qwen_key or "sk-dummy-qwen-key",
+            base_url=qwen_base_url
+        )
+        return client, qwen_model
     else:
         api_key = cfg.get("deepseek_key_override") or os.getenv("DEEPSEEK_API_KEY", "")
         base_url = cfg.get("deepseek_base_url") or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -510,6 +528,19 @@ def execute_ai_completion(
                     return (resp.choices[0].message.content or "{}"), "gemini-3.5-flash"
                 raise gem_err
 
+    elif provider == "qwen":
+        client, model = get_ai_client("qwen", cfg)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=max_tokens
+        )
+        return (resp.choices[0].message.content or "{}"), model
+
     else:
         # Default: deepseek
         client, model = get_ai_client("deepseek", cfg)
@@ -549,11 +580,13 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
             "Supertrend_ADX_Momentum",
             "EMA_Trend_Pullback",
             "BB_Volatility_Breakout",
-            "RSI_Divergence_Reversal"
+            "RSI_Divergence_Reversal",
+            "Asian_Judas_Swing",
+            "SMT_Divergence"
         ],
         "timeframe": "15m",
         "risk_pct": 0.01,
-        "min_score": 70,
+        "min_score": 75,
         "min_rvol": 1.0,
         "enable_breakeven_partial": True,
         "max_directional_exposure_pct": 0.015,
@@ -565,9 +598,12 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "quarantined_symbols": [],
         "deepseek_model": "deepseek-chat",
         "deepseek_base_url": "https://api.deepseek.com",
-        "ai_provider": "deepseek",
+        "ai_provider": "council_3model",
         "gemini_api_key_override": None,
         "gemini_model": "gemini-3.5-flash",
+        "qwen_api_key_override": None,
+        "qwen_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "qwen_model": "qwen3.7-flash",
         "exchange_mode": "binance",
         "bybit_api_key_override": None,
         "bybit_secret_override": None,
@@ -917,6 +953,302 @@ def verify_and_score_audit(raw_audit: Dict[str, Any]) -> Tuple[int, bool, Option
     return total_clamped, False, None, breakdown
 
 
+def verify_and_score_council(
+    gemini_rep: Dict[str, Any],
+    qwen_rep: Dict[str, Any],
+    deepseek_rep: Dict[str, Any]
+) -> Tuple[int, bool, Optional[str], Dict[str, Any], Dict[str, int]]:
+    """
+    Synthesizes and validates the 3-Model AI Council consensus score:
+    - Gemini Chartist:
+      * htf_regime: clamped {0, 10, 20}
+      * ltf_location: clamped {0, 10, 20}
+      * chart_veto: bool
+      Max Gemini Score: 40 points
+    - Qwen Quant & Macro:
+      * momentum_volume: clamped {0, 5, 10}
+      * news_catalyst: clamped {0, 5, 10}
+      * intermarket_tide: clamped {0, 5, 10}
+      * macro_or_funding_veto: bool
+      Max Qwen Score: 30 points
+    - DeepSeek Chief Risk Officer:
+      * risk_audit: clamped {0, 15, 30}
+      * kill_switch: { macro_blackout, specialist_conflict, insufficient_rr, lesson_violation, veto_triggered, veto_reason }
+      Max DeepSeek Score: 30 points
+    - Total Consensus Score: 0 to 100 points
+    """
+    def clamp_discrete(val: Any, allowed: List[int], default: int) -> int:
+        try:
+            val_int = int(val)
+            if val_int in allowed:
+                return val_int
+            return min(allowed, key=lambda x: abs(x - val_int))
+        except (ValueError, TypeError):
+            return default
+
+    # Check for hard vetoes across all 3 models
+    gemini_veto = bool(gemini_rep.get("chart_veto", False))
+    qwen_veto = bool(qwen_rep.get("macro_or_funding_veto", False))
+    ds_kill = deepseek_rep.get("kill_switch", {}) if isinstance(deepseek_rep.get("kill_switch"), dict) else {}
+    ds_veto = bool(ds_kill.get("veto_triggered", False)) or bool(deepseek_rep.get("veto_triggered", False))
+
+    veto_reason = None
+    if gemini_veto:
+        veto_reason = f"Gemini Chartist Veto: {gemini_rep.get('chart_verdict', 'Opposing market structure wall')}"
+    elif qwen_veto:
+        veto_reason = f"Qwen Quant/Macro Veto: {qwen_rep.get('quant_summary', 'Macro blackout or funding crowding')}"
+    elif ds_veto:
+        veto_reason = ds_kill.get("veto_reason") or deepseek_rep.get("veto_reason") or "DeepSeek Chief Judge Veto Triggered"
+
+    # Clamping Gemini Scores (Max 40)
+    htf_score = clamp_discrete(gemini_rep.get("htf_regime", {}).get("score"), [0, 10, 20], 10)
+    ltf_score = clamp_discrete(gemini_rep.get("ltf_location", {}).get("score"), [0, 10, 20], 10)
+    gemini_total = htf_score + ltf_score
+
+    # Clamping Qwen Scores (Max 30)
+    mom_score = clamp_discrete(qwen_rep.get("momentum_volume", {}).get("score"), [0, 5, 10], 5)
+    news_score = clamp_discrete(qwen_rep.get("news_catalyst", {}).get("score"), [0, 5, 10], 5)
+    tide_score = clamp_discrete(qwen_rep.get("intermarket_tide", {}).get("score"), [0, 5, 10], 5)
+    qwen_total = mom_score + news_score + tide_score
+
+    # Clamping DeepSeek Risk Score (Max 30)
+    risk_item = deepseek_rep.get("risk_audit", {}) if isinstance(deepseek_rep.get("risk_audit"), dict) else {}
+    risk_score = clamp_discrete(risk_item.get("score"), [0, 15, 30], 15)
+    deepseek_total = risk_score
+
+    total_score = gemini_total + qwen_total + deepseek_total
+    is_veto = gemini_veto or qwen_veto or ds_veto
+
+    if is_veto:
+        total_score = 0
+
+    rubric_breakdown = {
+        "htf_regime": {
+            "score": htf_score,
+            "max": 20,
+            "flaw_or_deduction": gemini_rep.get("htf_regime", {}).get("flaw_or_deduction", "Structure evaluated")
+        },
+        "ltf_location": {
+            "score": ltf_score,
+            "max": 20,
+            "flaw_or_deduction": gemini_rep.get("ltf_location", {}).get("flaw_or_deduction", "Location evaluated")
+        },
+        "momentum_volume": {
+            "score": mom_score,
+            "max": 10,
+            "flaw_or_deduction": qwen_rep.get("momentum_volume", {}).get("flaw_or_deduction", "Volume evaluated")
+        },
+        "news_catalyst": {
+            "score": news_score,
+            "max": 10,
+            "flaw_or_deduction": qwen_rep.get("news_catalyst", {}).get("flaw_or_deduction", "Catalyst evaluated")
+        },
+        "intermarket_tide": {
+            "score": tide_score,
+            "max": 10,
+            "flaw_or_deduction": qwen_rep.get("intermarket_tide", {}).get("flaw_or_deduction", "Intermarket evaluated")
+        },
+        "risk_execution": {
+            "score": risk_score,
+            "max": 30,
+            "flaw_or_deduction": risk_item.get("flaw_or_deduction", "Risk verified")
+        }
+    }
+
+    council_scores = {
+        "gemini": gemini_total,
+        "qwen": qwen_total,
+        "deepseek": deepseek_total,
+        "total": total_score
+    }
+
+    return total_score, is_veto, veto_reason, rubric_breakdown, council_scores
+
+
+def execute_council_audit(
+    cfg: Dict[str, Any],
+    candidate_setup: Dict[str, Any],
+    top_down_context: Dict[str, Any],
+    market_snapshot: Dict[str, Any],
+    headlines: List[Dict[str, Any]],
+    lessons_block: str,
+    macro_status: Dict[str, Any],
+    session_info: Optional[Dict[str, Any]]
+) -> Tuple[int, bool, Optional[str], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, int], str]:
+    """
+    Executes the 3-Model AI Council consensus audit:
+    - Stage 1: Parallel dispatch to Gemini Chartist (40 pts) & Qwen Quant/Macro (30 pts) via ThreadPoolExecutor.
+    - Stage 2: DeepSeek Chief Risk Officer (30 pts) synthesizes both specialist reports, runs adversarial debate,
+               enforces kill-switches, and computes final consensus.
+    Returns:
+    (total_score, veto_triggered, veto_reason, rubric_breakdown, gemini_rep, qwen_rep, deepseek_rep, council_scores, primary_model)
+    """
+    symbol = candidate_setup["symbol"]
+    side = candidate_setup["side"]
+    strat_name = candidate_setup["strategy_name"]
+
+    # 1. Gemini Chartist Payload
+    def _run_gemini() -> Tuple[Dict[str, Any], str]:
+        gemini_user_payload = {
+            "symbol": symbol,
+            "direction": side,
+            "strategy_name": strat_name,
+            "entry_price": candidate_setup["entry"],
+            "stop_loss": candidate_setup["sl"],
+            "take_profit": candidate_setup["tp"],
+            "reward_risk_ratio": candidate_setup["rr"],
+            "top_down_market_structure": {
+                "4h_macro_bias": top_down_context.get("htf_4h", {}).get("bias"),
+                "1h_dealing_zone": top_down_context.get("itf_1h", {}).get("zone"),
+                "1h_depth_pct": top_down_context.get("itf_1h", {}).get("range_depth_pct"),
+                "1h_equilibrium": top_down_context.get("itf_1h", {}).get("equilibrium"),
+                "is_ote_fib": top_down_context.get("itf_1h", {}).get("is_ote"),
+            },
+            "institutional_benchmarks": {
+                "asian_range": top_down_context.get("asian_range"),
+                "daily_benchmarks": top_down_context.get("daily_benchmarks"),
+            },
+            "local_liquidity_pools_15m": top_down_context.get("ltf_15m"),
+            "setup_notes": candidate_setup.get("setup_notes")
+        }
+        try:
+            content, model = execute_ai_completion(
+                {**cfg, "ai_provider": "gemini"},
+                system_prompt=GEMINI_CHARTIST_SYSTEM_PROMPT,
+                user_prompt=json.dumps(gemini_user_payload, indent=2),
+                max_tokens=600
+            )
+            return parse_ai_json(content), model
+        except Exception as e:
+            print(f"[council] Gemini Chartist warning: {e}")
+            return {
+                "htf_bias": "RANGING",
+                "htf_regime": {"flaw_or_deduction": f"Gemini fallback: {e}", "score": 10},
+                "ltf_location": {"flaw_or_deduction": "Default location score", "score": 10},
+                "chart_veto": False,
+                "chart_verdict": f"Gemini connection fallback: {e}"
+            }, "gemini-fallback"
+
+    # 2. Qwen Quant & Macro Payload
+    def _run_qwen() -> Tuple[Dict[str, Any], str]:
+        has_qwen_key = bool(cfg.get("qwen_api_key_override") or os.getenv("QWEN_API_KEY"))
+        if not has_qwen_key:
+            # Deterministic fallback when Qwen API key is not yet configured in Admin Settings
+            rvol = float(market_snapshot.get("rvol", 1.0) or 1.0)
+            funding = float(market_snapshot.get("funding_rate", 0.0) or 0.0)
+            is_blackout = bool(macro_status.get("in_blackout", False)) if isinstance(macro_status, dict) else False
+            mom_pts = 10 if rvol >= 1.4 else (5 if rvol >= 1.0 else 0)
+            news_pts = 0 if is_blackout else (10 if headlines else 5)
+            tide_pts = 10 if "ALIGNED" in str(market_snapshot.get("htf_status", "")) else 5
+            return {
+                "momentum_volume": {
+                    "flaw_or_deduction": f"RVOL {rvol:.2f}x with funding {funding:.4f}%",
+                    "score": mom_pts
+                },
+                "news_catalyst": {
+                    "flaw_or_deduction": "ForexFactory macro window clear" if not is_blackout else "Macro blackout active",
+                    "score": news_pts
+                },
+                "intermarket_tide": {
+                    "flaw_or_deduction": f"Session {session_info.get('session_name') if session_info else 'Crypto'} flow",
+                    "score": tide_pts
+                },
+                "macro_or_funding_veto": is_blackout,
+                "quant_summary": "Deterministic quantitative metrics applied (Qwen API key unconfigured)."
+            }, "deterministic-quant-fallback"
+
+        qwen_user_payload = {
+            "symbol": symbol,
+            "direction": side,
+            "strategy_name": strat_name,
+            "relative_volume_rvol": market_snapshot.get("rvol", 1.0),
+            "atr": market_snapshot.get("atr"),
+            "funding_rate_pct": market_snapshot.get("funding_rate", 0.0),
+            "broker_spread_pips": market_snapshot.get("spread_pips"),
+            "active_session": session_info.get("session_name") if session_info else "24/7 Crypto Market",
+            "forex_factory_macro_blackout": macro_status,
+            "latest_headlines": headlines[:5] if headlines else [],
+            "cross_pair_smt_divergence": top_down_context.get("smt_divergence", {}).get("description", "None"),
+            "benchmark_context": market_snapshot.get("htf_status")
+        }
+        try:
+            content, model = execute_ai_completion(
+                {**cfg, "ai_provider": "qwen"},
+                system_prompt=QWEN_QUANT_MACRO_SYSTEM_PROMPT,
+                user_prompt=json.dumps(qwen_user_payload, indent=2),
+                max_tokens=600
+            )
+            return parse_ai_json(content), model
+        except Exception as e:
+            print(f"[council] Qwen Quant/Macro warning: {e}")
+            return {
+                "momentum_volume": {"flaw_or_deduction": f"Qwen fallback: {e}", "score": 5},
+                "news_catalyst": {"flaw_or_deduction": "Default neutral news", "score": 5},
+                "intermarket_tide": {"flaw_or_deduction": "Default neutral tide", "score": 5},
+                "macro_or_funding_veto": False,
+                "quant_summary": f"Qwen connection fallback: {e}"
+            }, "qwen-fallback"
+
+    # Parallel Stage 1 Execution
+    print(f"[council] 🏛️ Stage 1: Parallel dispatch to Gemini Chartist (40 pts) & Qwen Quant (30 pts) for {symbol} {side}...")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_gem = executor.submit(_run_gemini)
+        future_qwen = executor.submit(_run_qwen)
+        gemini_rep, gemini_model = future_gem.result(timeout=14)
+        qwen_rep, qwen_model = future_qwen.result(timeout=14)
+
+    # Stage 2 Execution: DeepSeek Chief Risk Officer & Final Rubric Judge
+    print(f"[council] ⚖️ Stage 2: DeepSeek Chief Risk Officer auditing Gemini & Qwen reports with adversarial debate...")
+    deepseek_user_payload = {
+        "candidate_setup": {
+            "symbol": symbol,
+            "direction": side,
+            "strategy_name": strat_name,
+            "entry_price": candidate_setup["entry"],
+            "stop_loss": candidate_setup["sl"],
+            "take_profit": candidate_setup["tp"],
+            "reward_risk_ratio": candidate_setup["rr"],
+            "setup_notes": candidate_setup.get("setup_notes")
+        },
+        "specialist_reports": {
+            "gemini_chartist_report": gemini_rep,
+            "qwen_quant_macro_report": qwen_rep
+        },
+        "active_bot_lessons": lessons_block
+    }
+
+    try:
+        ds_content, ds_model = execute_ai_completion(
+            {**cfg, "ai_provider": "deepseek"},
+            system_prompt=DEEPSEEK_CHIEF_JUDGE_SYSTEM_PROMPT,
+            user_prompt=json.dumps(deepseek_user_payload, indent=2),
+            max_tokens=800
+        )
+        deepseek_rep = parse_ai_json(ds_content)
+    except Exception as ds_err:
+        print(f"[council] DeepSeek Chief Judge warning: {ds_err}")
+        deepseek_rep = {
+            "proposed_direction": side,
+            "debate": {
+                "bearish_devils_advocate": f"DeepSeek audit fallback: {ds_err}",
+                "bullish_defense": "Specialist signals approved by Gemini and Qwen."
+            },
+            "kill_switch": {"veto_triggered": False, "veto_reason": None},
+            "risk_audit": {"flaw_or_deduction": "Default risk audit score due to timeout", "score": 15},
+            "executive_summary": "DeepSeek fallback audit completed."
+        }
+        ds_model = "deepseek-fallback"
+
+    # Consensus Synthesis
+    total_score, veto_triggered, veto_reason, rubric, council_scores = verify_and_score_council(
+        gemini_rep, qwen_rep, deepseek_rep
+    )
+
+    primary_model = f"Council (Gemini:{gemini_model} + Qwen:{qwen_model} + DeepSeek:{ds_model})"
+
+    return total_score, veto_triggered, veto_reason, rubric, gemini_rep, qwen_rep, deepseek_rep, council_scores, primary_model
+
+
 # --- CORRELATED EXPOSURE PROTECTION ---
 
 def check_correlated_exposure(supabase: Client, proposed_side: str, proposed_risk_pct: float, max_exposure_pct: float) -> bool:
@@ -965,6 +1297,23 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
         "mae_r": trade.get("mae_r"),
         "entry_scores": trade.get("entry_scores")
     }
+
+    try:
+        # Fetch initial Council audit to provide DeepSeek with Gemini and Qwen context
+        audit_res = (
+            supabase.table("ai_audit_logs")
+            .select("gemini_report, qwen_report, deepseek_report, council_scores")
+            .eq("symbol", trade.get("symbol"))
+            .order("created_at", ascending=False)
+            .limit(1)
+            .execute()
+        )
+        if audit_res.data and len(audit_res.data) > 0:
+            payload["gemini_chart_report"] = audit_res.data[0].get("gemini_report", {})
+            payload["qwen_quant_report"] = audit_res.data[0].get("qwen_report", {})
+            payload["initial_council_scores"] = audit_res.data[0].get("council_scores", {})
+    except Exception:
+        pass
 
     try:
         content, model_used = execute_ai_completion(
@@ -1669,9 +2018,15 @@ def scan_and_execute_signals(
                     if ask > 0 and bid > 0:
                         pip_sz = get_forex_pip_size(symbol)
                         spread_pips = round(abs(ask - bid) / pip_sz, 1)
-                        max_spread = float(cfg.get("forex_max_spread_pips", 3.5) or 3.5)
-                        if spread_pips > max_spread:
-                            print(f"[scanner] Skipping {symbol}: Broker spread {spread_pips} pips exceeds max threshold {max_spread} pips (adjust in dashboard settings if desired).")
+                        configured_spread = float(cfg.get("forex_max_spread_pips", 3.5) or 3.5)
+                        # Precious metals (Gold/Silver) naturally carry wider pip spreads than EUR/USD.
+                        # Floor metals at 3.5 pips so normal tight spreads (e.g. 2.0 pips for Silver) are not choked.
+                        is_metal = any(m in symbol.upper() for m in ["XAU", "XAG", "GOLD", "SILVER"])
+                        effective_max_spread = max(configured_spread, 3.5) if is_metal else configured_spread
+
+                        if spread_pips > effective_max_spread:
+                            asset_type = "Metals" if is_metal else "Forex"
+                            print(f"[scanner] Skipping {symbol}: {asset_type} spread {spread_pips} pips exceeds max threshold {effective_max_spread} pips (adjust in dashboard settings if desired).")
                             continue
                 except Exception:
                     pass
@@ -1788,22 +2143,67 @@ def scan_and_execute_signals(
                     "macro_blackout_state": macro_status
                 }
 
-                active_prov = str(cfg.get("ai_provider", "deepseek")).upper()
-                print(f"[scanner] Requesting AI Risk Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()}) via {active_prov}...")
-                model_used = cfg.get("deepseek_model", "deepseek-chat")
-                try:
-                    content, model_used = execute_ai_completion(
-                        cfg,
-                        system_prompt=SYSTEM_AUDIT_PROMPT,
-                        user_prompt=f"Audit this candidate setup:\n{json.dumps(audit_payload, indent=2)}",
-                        max_tokens=700
-                    )
-                    raw_audit = parse_ai_json(content)
-                except Exception as ai_err:
-                    print(f"[scanner] AI API audit warning: {ai_err}")
-                    raw_audit = {"veto_triggered": True, "veto_reason": f"AI API communication failure ({ai_err})"}
+                active_prov = str(cfg.get("ai_provider", "council_3model")).strip().lower()
+                gemini_rep = {}
+                qwen_rep = {}
+                deepseek_rep = {}
+                council_scores = {}
 
-                total_score, veto_triggered, veto_reason, rubric = verify_and_score_audit(raw_audit)
+                if active_prov in ["council_3model", "council"]:
+                    candidate_setup_dict = {
+                        "symbol": symbol,
+                        "side": side,
+                        "strategy_name": strat_name,
+                        "entry": setup["entry"],
+                        "sl": setup["sl"],
+                        "tp": setup["tp"],
+                        "rr": setup["rr"],
+                        "setup_notes": setup.get("setup_notes", ""),
+                        "exchange": exchange_name
+                    }
+                    market_snap_dict = {
+                        "rvol": rvol,
+                        "atr": float(ind_df["atr_14"].iloc[-1]) if "atr_14" in ind_df.columns and pd.notnull(ind_df["atr_14"].iloc[-1]) else None,
+                        "funding_rate": funding_rate,
+                        "spread_pips": spread_pips,
+                        "htf_status": htf_status
+                    }
+                    (
+                        total_score,
+                        veto_triggered,
+                        veto_reason,
+                        rubric,
+                        gemini_rep,
+                        qwen_rep,
+                        deepseek_rep,
+                        council_scores,
+                        model_used
+                    ) = execute_council_audit(
+                        cfg,
+                        candidate_setup_dict,
+                        top_down_context,
+                        market_snap_dict,
+                        headlines,
+                        lessons_block,
+                        macro_status,
+                        session_info
+                    )
+                else:
+                    print(f"[scanner] Requesting AI Risk Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()}) via {active_prov.upper()}...")
+                    model_used = cfg.get("deepseek_model", "deepseek-chat")
+                    try:
+                        content, model_used = execute_ai_completion(
+                            cfg,
+                            system_prompt=SYSTEM_AUDIT_PROMPT,
+                            user_prompt=f"Audit this candidate setup:\n{json.dumps(audit_payload, indent=2)}",
+                            max_tokens=700
+                        )
+                        raw_audit = parse_ai_json(content)
+                    except Exception as ai_err:
+                        print(f"[scanner] AI API audit warning: {ai_err}")
+                        raw_audit = {"veto_triggered": True, "veto_reason": f"AI API communication failure ({ai_err})"}
+
+                    total_score, veto_triggered, veto_reason, rubric = verify_and_score_audit(raw_audit)
 
                 # Log to ai_audit_logs
                 supabase.table("ai_audit_logs").insert({
@@ -1819,6 +2219,10 @@ def scan_and_execute_signals(
                     "veto_triggered": veto_triggered,
                     "veto_reason": veto_reason,
                     "rubric_breakdown": rubric,
+                    "gemini_report": gemini_rep,
+                    "qwen_report": qwen_rep,
+                    "deepseek_report": deepseek_rep,
+                    "council_scores": council_scores,
                     "market_snapshot": {
                         "entry": setup["entry"],
                         "sl": setup["sl"],
