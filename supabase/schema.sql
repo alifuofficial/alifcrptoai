@@ -270,6 +270,39 @@ SELECT
 FROM trade_executions
 GROUP BY strategy_name;
 
+-- 8B. SESSION & TIME-OF-DAY PERFORMANCE VIEW (P12 FIX)
+CREATE OR REPLACE VIEW session_performance_view AS
+SELECT
+    COALESCE(forex_session, 'Continuous_Crypto') AS trading_session,
+    strategy_name,
+    COUNT(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') THEN 1 END)::INT AS closed_trades,
+    COUNT(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') AND COALESCE(pnl_usdt, 0) > 0 THEN 1 END)::INT AS wins,
+    COUNT(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') AND COALESCE(pnl_usdt, 0) < 0 THEN 1 END)::INT AS losses,
+    ROUND(
+        COALESCE(
+            (COUNT(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') AND COALESCE(pnl_usdt, 0) > 0 THEN 1 END)::NUMERIC * 100.0) /
+            NULLIF(COUNT(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') THEN 1 END), 0),
+            0.0
+        ),
+        2
+    ) AS win_rate_pct,
+    ROUND(
+        COALESCE(
+            SUM(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') THEN pnl_usdt ELSE 0 END),
+            0.0
+        ),
+        2
+    ) AS net_pnl_usdt,
+    ROUND(
+        COALESCE(
+            AVG(CASE WHEN status IN ('CLOSED_TP', 'CLOSED_SL', 'TIME_STOP', 'MANUAL_CLOSE') THEN pnl_r ELSE NULL END),
+            0.0
+        ),
+        2
+    ) AS avg_r_multiple
+FROM trade_executions
+GROUP BY COALESCE(forex_session, 'Continuous_Crypto'), strategy_name;
+
 -- 9. TRADING JOURNAL & ANALYTICS VIEW
 DROP VIEW IF EXISTS trading_journal_view CASCADE;
 CREATE OR REPLACE VIEW trading_journal_view AS
@@ -494,6 +527,44 @@ SELECT
 FROM trade_executions t
 LEFT JOIN trade_autopsies a ON t.id = a.trade_id
 ORDER BY t.opened_at DESC;
+
+-- 13. HISTORICAL BACKTEST RUNS TABLE (Real 1-Year Backtesting Engine)
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id BIGSERIAL PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    exchange TEXT NOT NULL DEFAULT 'binance',
+    timeframe TEXT NOT NULL DEFAULT '15m',
+    lookback_days INT NOT NULL DEFAULT 365,
+    initial_capital NUMERIC(14,2) NOT NULL DEFAULT 100.00,
+    final_capital NUMERIC(14,2) NOT NULL,
+    net_pnl_usdt NUMERIC(14,2) NOT NULL,
+    net_return_pct NUMERIC(8,2) NOT NULL,
+    win_rate_pct NUMERIC(6,2) NOT NULL,
+    profit_factor NUMERIC(6,2) NOT NULL,
+    total_r_accumulated NUMERIC(8,2) NOT NULL,
+    max_drawdown_pct NUMERIC(6,2) NOT NULL,
+    total_trades INT NOT NULL,
+    wins INT NOT NULL,
+    losses INT NOT NULL,
+    breakevens INT NOT NULL,
+    strategy_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+    monthly_performance JSONB NOT NULL DEFAULT '{}'::jsonb,
+    equity_curve JSONB NOT NULL DEFAULT '[]'::jsonb,
+    sample_trades JSONB NOT NULL DEFAULT '[]'::jsonb,
+    executed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_symbol 
+    ON backtest_runs (symbol, lookback_days);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_executed 
+    ON backtest_runs (executed_at DESC);
+
+-- Enable RLS & full access policies for backtest_runs
+ALTER TABLE backtest_runs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow public read backtest_runs" ON backtest_runs FOR SELECT USING (true);
+CREATE POLICY "Allow public insert backtest_runs" ON backtest_runs FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update backtest_runs" ON backtest_runs FOR UPDATE USING (true);
+CREATE POLICY "Allow public delete backtest_runs" ON backtest_runs FOR DELETE USING (true);
 
 -- Reload Supabase PostgREST schema cache immediately
 NOTIFY pgrst, 'reload schema';

@@ -132,12 +132,15 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
 
-    # 2. Average True Range (ATR 14)
+    # 2. Average True Range (ATR 14) — P14 FIX: Wilder's RMA (alpha=1/14) instead of SMA
+    # Industry standard used by TradingView and professional platforms.
+    # RMA is more stable than SMA-ATR and gives accurate SL sizing on volatile crypto.
     high_low = df["high"] - df["low"]
     high_close = (df["high"] - df["close"].shift()).abs()
     low_close = (df["low"] - df["close"].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr_14"] = tr.rolling(window=14).mean()
+    # Wilder's RMA = EMA with alpha = 1/period (com = period - 1)
+    df["atr_14"] = tr.ewm(com=13, adjust=False).mean()
 
     # 3. RVOL 20 (Relative Volume: Current Volume / 20-period Volume SMA)
     vol_sma_20 = df["volume"].rolling(window=20).mean()
@@ -292,18 +295,66 @@ def calc_top_down_structure(
     df_15m: pd.DataFrame,
     df_1h: Optional[pd.DataFrame] = None,
     df_4h: Optional[pd.DataFrame] = None,
+    df_1d: Optional[pd.DataFrame] = None,       # P2 FIX: Daily timeframe for true ICT top-down
     symbol: str = "BTC/USDT",
     correlated_df: Optional[pd.DataFrame] = None
 ) -> Dict[str, Any]:
     """
-    Computes institutional Top-Down Market Structure across 4H, 1H, and 15m:
-    1. 4H Macro Trend & Structure (Higher Highs/Higher Lows vs Lower Highs/Lower Lows, 4H EMA 50 alignment).
-    2. 1H Intermediate Dealing Range [Range Low, Range High], Equilibrium (50%), and Premium vs. Discount zone.
-    3. 15m Local Liquidity Pools (EQH, EQL, Fractal Pivots).
-    4. Institutional Horizontal Benchmarks: Previous Day High/Low (PDH/PDL), Asian Box (00:00-07:00 UTC).
-    5. Cross-Pair Smart Money Technique (SMT) Divergence triangulation.
+    Computes institutional Top-Down Market Structure across Daily, 4H, 1H, and 15m:
+    P2 FIX: Added 1D (Daily) timeframe as the highest structural frame, completing the
+    proper ICT sequence: Weekly concept → Daily → 4H → 1H → 15m.
+    1. DAILY Trend Bias (EMA 20/50 Daily, Daily HH/HL vs LH/LL, Daily range high/low).
+    2. 4H Macro Trend & Structure (Higher Highs/Higher Lows vs Lower Highs/Lower Lows, 4H EMA 50 alignment).
+    3. 1H Intermediate Dealing Range [Range Low, Range High], Equilibrium (50%), and Premium vs. Discount zone.
+    4. 15m Local Liquidity Pools (EQH, EQL, Fractal Pivots).
+    5. Institutional Horizontal Benchmarks: Previous Day High/Low (PDH/PDL), Asian Box (00:00-07:00 UTC).
+    6. Cross-Pair Smart Money Technique (SMT) Divergence triangulation.
     """
     latest_price = float(df_15m["close"].iloc[-1])
+
+    # --- 0. DAILY (1D) Macro Context — P2 FIX ---
+    daily_bias = "NEUTRAL"
+    daily_high = latest_price * 1.10
+    daily_low = latest_price * 0.90
+    daily_ema_50 = None
+    daily_key_support = None
+    daily_key_resistance = None
+
+    if df_1d is not None and len(df_1d) >= 15:
+        try:
+            c1d = df_1d["close"].astype(float)
+            ema_20_1d = float(c1d.ewm(span=20, adjust=False).mean().iloc[-1])
+            ema_50_1d = float(c1d.ewm(span=50, adjust=False).mean().iloc[-1])
+            curr_1d_close = float(c1d.iloc[-1])
+            daily_ema_50 = ema_50_1d
+
+            daily_high = float(df_1d["high"].astype(float).iloc[-20:].max())
+            daily_low = float(df_1d["low"].astype(float).iloc[-20:].min())
+
+            # Daily swing pivots for HH/HL vs LH/LL
+            pivots_1d = detect_fractal_pivots(df_1d, window=2)
+            d_highs = pivots_1d["highs"]
+            d_lows = pivots_1d["lows"]
+
+            is_1d_hh_hl = False
+            is_1d_lh_ll = False
+            if len(d_highs) >= 2 and len(d_lows) >= 2:
+                is_1d_hh_hl = (d_highs[-1]["price"] > d_highs[-2]["price"]) and (d_lows[-1]["price"] > d_lows[-2]["price"])
+                is_1d_lh_ll = (d_highs[-1]["price"] < d_highs[-2]["price"]) and (d_lows[-1]["price"] < d_lows[-2]["price"])
+
+            if d_highs:
+                daily_key_resistance = float(d_highs[-1]["price"])
+            if d_lows:
+                daily_key_support = float(d_lows[-1]["price"])
+
+            if curr_1d_close > ema_50_1d and (is_1d_hh_hl or curr_1d_close > ema_20_1d):
+                daily_bias = "BULLISH"
+            elif curr_1d_close < ema_50_1d and (is_1d_lh_ll or curr_1d_close < ema_20_1d):
+                daily_bias = "BEARISH"
+            else:
+                daily_bias = "RANGING"
+        except Exception:
+            pass
 
     # --- 1. 4H Macro Analysis ---
     htf_4h_bias = "NEUTRAL"
@@ -408,6 +459,14 @@ def calc_top_down_structure(
 
     return {
         "symbol": symbol,
+        "daily_1d": {                       # P2 FIX: Daily timeframe context
+            "bias": daily_bias,
+            "range_high": daily_high,
+            "range_low": daily_low,
+            "ema_50": daily_ema_50,
+            "key_support": daily_key_support,
+            "key_resistance": daily_key_resistance
+        },
         "htf_4h": {
             "bias": htf_4h_bias,
             "range_high": htf_4h_high,
@@ -498,12 +557,26 @@ def smc_liquidity_sweep(
             if itf_zone == "PREMIUM" and itf_depth > 55.0:
                 return None  # Do not chase longs in premium
 
-            # Check for bullish FVG (low of bar i > high of bar i-2 or bar i-1 > bar i-3)
-            has_fvg = (float(curr["low"]) > float(prev2["high"])) or (float(prev["low"]) > float(df.iloc[-4]["high"]))
+            # P8 FIX: Proper 3-candle ICT FVG with impulse body check.
+            # A valid bullish FVG requires: (1) gap between candle[-1].low and candle[-3].high,
+            # AND (2) the middle candle [-2] must be a strong impulse body (body > 40% of ATR).
+            # This filters out consolidation gaps and micro-noise gaps that the original check passed.
+            impulse_body = abs(float(prev["close"]) - float(prev["open"]))
+            has_proper_fvg = (float(curr["low"]) > float(prev2["high"])) and (impulse_body > 0.4 * atr)
+            # Fallback: check one bar further back for a wider sweep context
+            has_fvg = has_proper_fvg or (float(prev["low"]) > float(df.iloc[-4]["high"]) and impulse_body > 0.3 * atr)
             if not has_fvg:
                 return None
             swept_low = min(float(prev["low"]), float(curr["low"]))
-            entry = float(curr["close"])
+            # P4 FIX: Limit entry at FVG midpoint instead of market order at candle close.
+            # The FVG midpoint (between gap bottom and gap top) is the institutional entry zone.
+            # If no FVG gap is measurable, fall back to entry at the swept_low + 0.5*ATR (OB top).
+            fvg_top = float(curr["low"])
+            fvg_bottom = float(prev2["high"])
+            fvg_mid = (fvg_top + fvg_bottom) / 2.0
+            # Limit entry = inside the FVG (better than close price, natural pullback target)
+            limit_entry = round_price_dynamic(fvg_mid) if fvg_mid > swept_low else round_price_dynamic(float(curr["close"]))
+            entry = limit_entry if limit_entry > swept_low else float(curr["close"])
             sl = swept_low - (0.5 * atr)
             if entry > sl:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
@@ -518,7 +591,8 @@ def smc_liquidity_sweep(
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_low)}) + Bullish FVG reclaim{pdl_tag}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
+                    "entry_type": "LIMIT",  # P4: Use limit order at FVG midpoint
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_low)}) + Bullish FVG reclaim{pdl_tag}. Limit entry at FVG mid ${format_price_dynamic(entry_r)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -533,12 +607,21 @@ def smc_liquidity_sweep(
             if itf_zone == "DISCOUNT" and itf_depth < 45.0:
                 return None  # Do not short in discount
 
-            # Check for bearish FVG (high of bar i < low of bar i-2 or bar i-1 < low of bar i-3)
-            has_fvg = (float(curr["high"]) < float(prev2["low"])) or (float(prev["high"]) < float(df.iloc[-4]["low"]))
+            # P8 FIX: Proper 3-candle ICT FVG with impulse body check.
+            # A valid bearish FVG requires: (1) gap between candle[-1].high and candle[-3].low,
+            # AND (2) the middle candle [-2] must be a strong bearish impulse body (body > 40% of ATR).
+            impulse_body_bear = abs(float(prev["close"]) - float(prev["open"]))
+            has_proper_fvg = (float(curr["high"]) < float(prev2["low"])) and (impulse_body_bear > 0.4 * atr)
+            has_fvg = has_proper_fvg or (float(prev["high"]) < float(df.iloc[-4]["low"]) and impulse_body_bear > 0.3 * atr)
             if not has_fvg:
                 return None
             swept_high = max(float(prev["high"]), float(curr["high"]))
-            entry = float(curr["close"])
+            # P4 FIX: Limit entry at FVG midpoint or OB mitigation level instead of market order at candle close
+            fvg_top = float(curr["high"])
+            fvg_bottom = float(prev2["low"])
+            fvg_mid = (fvg_top + fvg_bottom) / 2.0
+            limit_entry = round_price_dynamic(fvg_mid) if fvg_mid < swept_high else round_price_dynamic(float(curr["close"]))
+            entry = limit_entry if limit_entry < swept_high else float(curr["close"])
             sl = swept_high + (0.5 * atr)
             if sl > entry:
                 entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
@@ -553,7 +636,8 @@ def smc_liquidity_sweep(
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_high)}) + Bearish FVG reclaim{pdh_tag}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
+                    "entry_type": "LIMIT",  # P4: Use limit order at FVG midpoint
+                    "setup_notes": f"Swept {pool_desc} (${format_price_dynamic(sweep_target_high)}) + Bearish FVG reclaim{pdh_tag}. Limit entry at FVG mid ${format_price_dynamic(entry_r)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}% depth){ote_tag}. RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -664,17 +748,24 @@ def strat_ict_orderblock_fvg(
 
         if support_levels:
             sl_anchor = max(support_levels)
-            sl = sl_anchor * 0.997
-            risk = entry - sl
+            # P4 & P7 FIX: Limit entry at OrderBlock / FVG mitigation midpoint instead of chasing candle close
+            limit_entry = round_price_dynamic(sl_anchor + 0.4 * (entry - sl_anchor))
+            entry_calc = limit_entry if limit_entry > sl_anchor else entry
+            # P7 FIX: Structural SL = OB/FVG bottom - 0.5*ATR buffer (not a fixed 0.3% percent)
+            # This places the stop behind the structural invalidation point with a volatility-adjusted buffer,
+            # matching institutional execution and preventing noise-induced premature stop-outs.
+            sl = sl_anchor - (0.5 * atr)
+            risk = entry_calc - sl
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry_calc, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "LONG",
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
+                    "entry_type": "LIMIT",  # P4: Limit order at OB mitigation
+                    "setup_notes": f"Bullish BOS/CHoCH with unmitigated FVG/OB support at {format_price_dynamic(sl_anchor)}. Limit entry at OB level {format_price_dynamic(entry_r)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -710,17 +801,22 @@ def strat_ict_orderblock_fvg(
 
         if resistance_levels:
             sl_anchor = min(resistance_levels)
-            sl = sl_anchor * 1.003
-            risk = sl - entry
+            # P4 & P7 FIX: Limit entry at OrderBlock / FVG mitigation midpoint instead of chasing candle close
+            limit_entry = round_price_dynamic(sl_anchor - 0.4 * (sl_anchor - entry))
+            entry_calc = limit_entry if limit_entry < sl_anchor else entry
+            # P7 FIX: Structural SL = OB/FVG top + 0.5*ATR buffer (not a fixed 0.3% percent)
+            sl = sl_anchor + (0.5 * atr)
+            risk = sl - entry_calc
             if risk > (0.2 * atr) and risk < (4.0 * atr):
-                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
+                entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry_calc, sl, target_rr=target_rr)
                 return {
                     "strategy_name": "ICT_OrderBlock_FVG",
                     "side": "SHORT",
                     "entry": entry_r,
                     "sl": sl_r,
                     "tp": tp_r,
-                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
+                    "entry_type": "LIMIT",  # P4: Limit order at OB mitigation
+                    "setup_notes": f"Bearish BOS/CHoCH with unmitigated FVG/OB resistance at {format_price_dynamic(sl_anchor)}. Limit entry at OB level {format_price_dynamic(entry_r)}. 4H: {htf_bias} | 1H: {itf_zone} ({itf_depth}%). RVOL: {rvol:.2f}x",
                     "rvol": round(rvol, 2),
                     "rr": rr
                 }
@@ -870,14 +966,19 @@ def strat_supertrend_adx(
 
         sl = st_line if st_line < entry else (entry - (1.5 * atr))
         if entry > sl:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", entry, sl, target_rr=target_rr)
+            # P11 FIX: Use limit entry at the Supertrend line value (the structural support after flip)
+            # instead of market order at candle close. Provides better fill price and natural SL anchor.
+            # limit_entry is the Supertrend line; st_entry_flag signals bot to place limit order.
+            limit_entry = round_price_dynamic(st_line) if st_line < entry else round_price_dynamic(entry - 0.3 * atr)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("LONG", limit_entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "LONG",
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Supertrend Bullish Flip with ADX: {adx_val:.1f} > 25. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
+                "entry_type": "LIMIT",  # P11: Signal bot to use limit order
+                "setup_notes": f"Supertrend Bullish Flip with ADX: {adx_val:.1f} > 25. Limit entry at ST line {format_price_dynamic(limit_entry)}. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -892,14 +993,17 @@ def strat_supertrend_adx(
 
         sl = st_line if st_line > entry else (entry + (1.5 * atr))
         if sl > entry:
-            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", entry, sl, target_rr=target_rr)
+            # P11 FIX: Limit entry at Supertrend line (the resistance after bearish flip)
+            limit_entry = round_price_dynamic(st_line) if st_line > entry else round_price_dynamic(entry + 0.3 * atr)
+            entry_r, sl_r, tp_r, rr = finalize_setup_geometry("SHORT", limit_entry, sl, target_rr=target_rr)
             return {
                 "strategy_name": "Supertrend_ADX_Momentum",
                 "side": "SHORT",
                 "entry": entry_r,
                 "sl": sl_r,
                 "tp": tp_r,
-                "setup_notes": f"Supertrend Bearish Flip with ADX: {adx_val:.1f} > 25. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
+                "entry_type": "LIMIT",  # P11: Signal bot to use limit order
+                "setup_notes": f"Supertrend Bearish Flip with ADX: {adx_val:.1f} > 25. Limit entry at ST line {format_price_dynamic(limit_entry)}. 4H: {htf_bias} | 1H: {itf_depth}%. RVOL: {rvol:.2f}x",
                 "rvol": round(rvol, 2),
                 "rr": rr
             }
@@ -1353,12 +1457,13 @@ def evaluate_enabled_strategies(
     ind_df: Optional[pd.DataFrame] = None,
     df_1h: Optional[pd.DataFrame] = None,
     df_4h: Optional[pd.DataFrame] = None,
+    df_1d: Optional[pd.DataFrame] = None,       # P2 FIX: Daily timeframe
     top_down_context: Optional[Dict[str, Any]] = None,
     target_rr: float = 2.5
 ) -> List[Dict[str, Any]]:
     """
     Calculates technical indicators and runs all currently enabled strategies.
-    Supports full Top-Down Multi-Timeframe Price Action (4H -> 1H -> 15m) and dynamic target_rr.
+    Supports full Top-Down Multi-Timeframe Price Action (Daily -> 4H -> 1H -> 15m) and dynamic target_rr.
     Returns candidate setup dictionaries matching the unified schema.
     Supports case-insensitive & underscore-resilient strategy name matching.
     """
@@ -1371,7 +1476,7 @@ def evaluate_enabled_strategies(
 
     # Compute Top-Down Market Structure context if not provided
     if top_down_context is None:
-        top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h)
+        top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h, df_1d=df_1d)
 
     candidate_setups: List[Dict[str, Any]] = []
 

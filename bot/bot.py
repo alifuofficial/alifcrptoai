@@ -128,10 +128,15 @@ _EXCHANGE_CONFIG_SIG: Optional[str] = None
 _BYBIT_CLIENT: Optional[ccxt.bybit] = None
 _BYBIT_CONFIG_SIG: Optional[str] = None
 
-# In-memory TTL cache for 1H and 4H OHLCV candles to prevent CCXT exchange rate limiting
+# In-memory TTL cache for 1H, 4H, and 1D OHLCV candles to prevent CCXT exchange rate limiting (P2 FIX)
 _HTF_CANDLE_CACHE: Dict[str, Dict[str, Any]] = {}
 # In-memory cache for 15m OHLCV DataFrames for cross-pair SMT evaluation
 _LTF_15M_CACHE: Dict[str, pd.DataFrame] = {}
+# In-memory cache for Open Interest (P5 FIX)
+_OPEN_INTEREST_CACHE: Dict[str, Dict[str, Any]] = {}
+# Global tracking for peak equity and daily drawdown halt (P1 & P13 FIX)
+_PEAK_EQUITY: float = 0.0
+_DAILY_HALT_DATE: Optional[str] = None
 
 
 def get_cached_ohlcv(exchange: Any, ex_sym: str, timeframe: str, limit: int = 60, ttl_sec: int = 600) -> Optional[List[Any]]:
@@ -139,6 +144,7 @@ def get_cached_ohlcv(exchange: Any, ex_sym: str, timeframe: str, limit: int = 60
     Fetches OHLCV bars with in-memory TTL caching:
     - 1H bars cached for 10 minutes (600s).
     - 4H bars cached for 30 minutes (1800s).
+    - 1D bars cached for 60 minutes (3600s) (P2 FIX).
     """
     if not exchange or not ex_sym:
         return None
@@ -164,6 +170,45 @@ def get_cached_ohlcv(exchange: Any, ex_sym: str, timeframe: str, limit: int = 60
         return None
 
     return None
+
+
+def get_cached_open_interest(exchange: Any, ex_sym: str, ttl_sec: int = 180) -> Dict[str, Any]:
+    """
+    Fetches Binance USDT-M / Bybit Open Interest with 3-minute in-memory caching (P5 FIX).
+    Returns {"open_interest": float | None, "open_interest_usd": float | None}
+    """
+    if not exchange or not ex_sym:
+        return {"open_interest": None, "open_interest_usd": None}
+    cache_key = f"{getattr(exchange, 'id', 'ex')}:{ex_sym}:oi"
+    now = time.time()
+
+    if cache_key in _OPEN_INTEREST_CACHE:
+        entry = _OPEN_INTEREST_CACHE[cache_key]
+        if (now - entry["timestamp"]) < ttl_sec:
+            return entry["data"]
+
+    result: Dict[str, Any] = {"open_interest": None, "open_interest_usd": None}
+    try:
+        if hasattr(exchange, "fetch_open_interest"):
+            oi_raw = exchange.fetch_open_interest(ex_sym)
+            if oi_raw:
+                amount = float(oi_raw.get("openInterestAmount") or oi_raw.get("openInterest") or 0.0)
+                val_usd = float(oi_raw.get("openInterestValue") or 0.0)
+                result = {
+                    "open_interest": amount if amount > 0 else None,
+                    "open_interest_usd": val_usd if val_usd > 0 else None
+                }
+        elif hasattr(exchange, "fetch_open_interest_history"):
+            hist = exchange.fetch_open_interest_history(ex_sym, limit=2)
+            if hist:
+                last_oi = hist[-1]
+                val = float(last_oi.get("openInterest") or last_oi.get("openInterestValue") or 0.0)
+                result = {"open_interest": val if val > 0 else None, "open_interest_usd": None}
+    except Exception:
+        pass
+
+    _OPEN_INTEREST_CACHE[cache_key] = {"timestamp": now, "data": result}
+    return result
 
 
 def resolve_exchange_symbol(exchange: Any, symbol: str) -> str:
@@ -588,6 +633,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "risk_pct": 0.01,
         "min_score": 75,
         "min_rvol": 1.0,
+        "daily_loss_limit_pct": 2.5,        # P1 FIX: Daily drawdown circuit breaker threshold (-2.5%)
         "enable_breakeven_partial": True,
         "max_directional_exposure_pct": 0.015,
         "max_hold_bars": 20,
@@ -827,6 +873,15 @@ def sync_account_telemetry(
     except Exception:
         pass
 
+    # Track Peak Equity and Equity Drawdown (P13 FIX)
+    global _PEAK_EQUITY
+    if equity > _PEAK_EQUITY:
+        _PEAK_EQUITY = equity
+
+    drawdown_from_peak_pct = 0.0
+    if _PEAK_EQUITY > 0 and equity > 0:
+        drawdown_from_peak_pct = round(((_PEAK_EQUITY - equity) / _PEAK_EQUITY) * 100.0, 2)
+
     # Insert snapshot
     try:
         supabase.table("account_snapshots").insert({
@@ -839,10 +894,13 @@ def sync_account_telemetry(
     except Exception as exc:
         print(f"[telemetry] Snapshot insert notice: {exc}")
 
-    except Exception as exc:
-        print(f"[telemetry] Sync notice: {exc}")
-
-    return {"equity": equity, "free_margin": free_margin}
+    return {
+        "equity": equity,
+        "free_margin": free_margin,
+        "daily_pnl_pct": daily_pnl_pct,
+        "daily_pnl_usdt": daily_pnl,
+        "drawdown_from_peak_pct": drawdown_from_peak_pct
+    }
 
 
 # --- DETERMINISTIC AI AUDIT VERIFICATION & RESILIENT JSON PARSER ---
@@ -1098,6 +1156,12 @@ def execute_council_audit(
             "take_profit": candidate_setup["tp"],
             "reward_risk_ratio": candidate_setup["rr"],
             "top_down_market_structure": {
+                "daily_1d_macro_bias": top_down_context.get("daily_1d", {}).get("bias"),
+                "daily_1d_range_high": top_down_context.get("daily_1d", {}).get("range_high"),
+                "daily_1d_range_low": top_down_context.get("daily_1d", {}).get("range_low"),
+                "daily_1d_ema_50": top_down_context.get("daily_1d", {}).get("ema_50"),
+                "daily_1d_key_support": top_down_context.get("daily_1d", {}).get("key_support"),
+                "daily_1d_key_resistance": top_down_context.get("daily_1d", {}).get("key_resistance"),
                 "4h_macro_bias": top_down_context.get("htf_4h", {}).get("bias"),
                 "1h_dealing_zone": top_down_context.get("itf_1h", {}).get("zone"),
                 "1h_depth_pct": top_down_context.get("itf_1h", {}).get("range_depth_pct"),
@@ -1164,6 +1228,8 @@ def execute_council_audit(
             "relative_volume_rvol": market_snapshot.get("rvol", 1.0),
             "atr": market_snapshot.get("atr"),
             "funding_rate_pct": market_snapshot.get("funding_rate", 0.0),
+            "open_interest": market_snapshot.get("open_interest"),
+            "open_interest_usd": market_snapshot.get("open_interest_usd"),
             "broker_spread_pips": market_snapshot.get("spread_pips"),
             "active_session": session_info.get("session_name") if session_info else "24/7 Crypto Market",
             "forex_factory_macro_blackout": macro_status,
@@ -1251,24 +1317,54 @@ def execute_council_audit(
 
 # --- CORRELATED EXPOSURE PROTECTION ---
 
-def check_correlated_exposure(supabase: Client, proposed_side: str, proposed_risk_pct: float, max_exposure_pct: float) -> bool:
+def check_correlated_exposure(
+    supabase: Client,
+    proposed_symbol: str,
+    proposed_side: str,
+    proposed_risk_pct: float,
+    max_exposure_pct: float
+) -> bool:
     """
-    Correlation & Beta-Stacking Lock:
-    Ensures total active un-hedged open risk (where breakeven_activated == False)
-    in the same direction across the portfolio does not exceed max_directional_exposure_pct.
+    Correlation & Beta-Stacking Lock (P9 FIX):
+    1. Ensures total active un-hedged open risk (where breakeven_activated == False)
+       in the same direction across the portfolio does not exceed max_directional_exposure_pct.
+    2. Currency Component Correlation Check:
+       - Prevents stacking identical USD-quote positions (e.g. EUR/USD Long + GBP/USD Long = 2x short USD).
+       - Prevents stacking correlated twin assets (e.g. BTC + ETH simultaneously Long without BE).
     """
     try:
-        res = supabase.table("trade_executions").select("side, initial_qty, entry_price, stop_loss, breakeven_activated").eq("status", "OPEN").execute()
+        res = supabase.table("trade_executions").select("symbol, side, initial_qty, entry_price, stop_loss, breakeven_activated").eq("status", "OPEN").execute()
+        open_trades = res.data or []
         current_dir_risk = 0.0
 
-        for t in res.data or []:
+        for t in open_trades:
             if t.get("side") == proposed_side and not t.get("breakeven_activated", False):
-                # An open trade represents ~1 unit of risk_pct
                 current_dir_risk += 0.01
 
         if (current_dir_risk + proposed_risk_pct) > max_exposure_pct:
-            print(f"[risk] Blocked entry: Directional exposure {current_dir_risk + proposed_risk_pct:.4f} > limit {max_exposure_pct:.4f}")
+            print(f"[risk] Blocked entry on {proposed_symbol}: Directional exposure {current_dir_risk + proposed_risk_pct:.4f} > limit {max_exposure_pct:.4f}")
             return False
+
+        # Currency & Twin-Asset correlation guard
+        clean_prop = proposed_symbol.replace(":USDT", "").replace("/USDT", "").upper()
+        for t in open_trades:
+            if t.get("breakeven_activated", False):
+                continue
+            ex_sym = t.get("symbol", "").replace(":USDT", "").replace("/USDT", "").upper()
+            ex_side = t.get("side")
+
+            # Correlated pair check (e.g. EUR/USD vs GBP/USD, XAU/USD vs XAG/USD, BTC vs ETH)
+            corr_target = CORRELATED_PAIR_MAP.get(clean_prop) or CORRELATED_PAIR_MAP.get(proposed_symbol)
+            if corr_target and (ex_sym == corr_target or t.get("symbol") == corr_target):
+                if ex_side == proposed_side:
+                    print(f"[risk] Blocked entry on {proposed_symbol} {proposed_side}: Correlated twin {t.get('symbol')} is already active {ex_side} without Breakeven lock.")
+                    return False
+
+            # Forex USD-quote stacking check (e.g. EUR/USD + GBP/USD in same direction)
+            if is_forex_symbol(proposed_symbol) and is_forex_symbol(t.get("symbol", "")):
+                if clean_prop.endswith("/USD") and ex_sym.endswith("/USD") and ex_side == proposed_side:
+                    print(f"[risk] Blocked entry on {proposed_symbol}: Redundant USD-quote stacking with active {t.get('symbol')} {ex_side}.")
+                    return False
     except Exception as exc:
         print(f"[risk] Exposure check warning: {exc}")
 
@@ -1281,12 +1377,17 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
     """
     Triggers DeepSeek Post-Mortem Autopsy for a losing trade (CLOSED_SL),
     records the root cause in trade_autopsies, and injects a new lesson in bot_lessons.
+    P12 FIX: Injects trading session and UTC hour into autopsy diagnosis and lesson guardrails.
     """
-    print(f"[autopsy] Conducting forensic autopsy on trade #{trade['id']} ({trade['symbol']})...")
+    session_tag = trade.get("forex_session") or "Continuous_Crypto"
+    hour_tag = trade.get("entry_session_utc")
+    print(f"[autopsy] Conducting forensic autopsy on trade #{trade['id']} ({trade['symbol']}, session: {session_tag}, hour: {hour_tag} UTC)...")
     payload = {
         "symbol": trade.get("symbol"),
         "strategy_name": trade.get("strategy_name"),
         "side": trade.get("side"),
+        "trading_session": session_tag,
+        "entry_session_utc": hour_tag,
         "entry_price": trade.get("entry_price"),
         "exit_price": trade.get("exit_price"),
         "stop_loss": trade.get("stop_loss"),
@@ -1324,7 +1425,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
         )
         autopsy_data = parse_ai_json(content)
 
-        # 1. Insert into trade_autopsies
+        # 1. Insert into trade_autopsies (P12 FIX: includes session tag and hour in root cause)
         supabase.table("trade_autopsies").insert({
             "trade_id": trade["id"],
             "symbol": trade["symbol"],
@@ -1332,7 +1433,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
             "outcome": "LOSS",
             "ai_model": model_used,
             "failure_category": autopsy_data.get("failure_category", "premature_entry_before_sweep"),
-            "root_cause_analysis": autopsy_data.get("root_cause_analysis", "Liquidity sweep was shallow."),
+            "root_cause_analysis": f"[{session_tag} @ {hour_tag}:00 UTC] " + str(autopsy_data.get("root_cause_analysis", "Liquidity sweep was shallow.")),
             "recommended_rule_adjustment": autopsy_data.get("recommended_rule_adjustment", "Enforce higher RVOL.")
         }).execute()
 
@@ -1341,7 +1442,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
         supabase.table("bot_lessons").insert({
             "symbol": trade["symbol"],
             "strategy_name": trade["strategy_name"],
-            "weakness_detected": autopsy_data.get("failure_category", "Risk weakness"),
+            "weakness_detected": f"[{session_tag}] " + str(autopsy_data.get("failure_category", "Risk weakness")),
             "prompt_guardrail_rule": autopsy_data.get("prompt_guardrail_rule", "Require clean displacement."),
             "suggested_param_key": autopsy_data.get("suggested_param_key", "min_rvol"),
             "suggested_param_value": autopsy_data.get("suggested_param_value", 1.4),
@@ -1354,7 +1455,7 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
 
         # Dispatch Telegram notification
         notify_trade_closed(cfg, trade, autopsy=autopsy_data)
-        print(f"[autopsy] Successfully recorded autopsy & lesson for trade #{trade['id']}.")
+        print(f"[autopsy] Successfully recorded session-tagged autopsy & lesson for trade #{trade['id']}.")
 
     except Exception as exc:
         print(f"[autopsy] Error executing autopsy: {exc}")
@@ -1853,15 +1954,29 @@ def scan_and_execute_signals(
     global _SCAN_HEARTBEAT_COUNT
     _SCAN_HEARTBEAT_COUNT += 1
 
-    # 1. Macro Blackout Check
-    macro_status = check_usd_macro_blackout()
-    if macro_status.get("macro_blackout"):
-        ev_title = macro_status.get("active_or_upcoming_event")
-        mins = macro_status.get("minutes_to_event")
-        print(f"[scanner] Macro Blackout Active ({ev_title}, {mins}m to release). Pausing new entries.")
-        return
+    # 0. P1 FIX: Daily Drawdown Circuit Breaker
+    # If cumulative daily realized PnL drops below -2.5% (or configured daily_loss_limit_pct),
+    # halt all new entries until next UTC day (00:00 UTC) to preserve capital.
+    daily_pnl_pct = float(account_info.get("daily_pnl_pct", 0.0) or 0.0)
+    configured_daily_limit = -abs(float(cfg.get("daily_loss_limit_pct", 2.5) or 2.5))
+    today_utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    global _DAILY_HALT_DATE
 
-    # 2. Blocked UTC Hours Check
+    if daily_pnl_pct <= configured_daily_limit:
+        if _DAILY_HALT_DATE != today_utc_date:
+            _DAILY_HALT_DATE = today_utc_date
+            alert_msg = f"🛑 DAILY DRAWDOWN LIMIT HIT ({daily_pnl_pct:+.2f}% <= {configured_daily_limit:.2f}%). All new trades halted until next UTC day (00:00 UTC) to preserve capital."
+            print(f"[risk] {alert_msg}")
+            send_telegram_alert(cfg, alert_msg)
+        if _SCAN_HEARTBEAT_COUNT % 10 == 1:
+            print(f"[risk] Daily Drawdown Circuit Breaker active ({daily_pnl_pct:+.2f}%). Scanning halted for today.")
+        return
+    elif _DAILY_HALT_DATE and _DAILY_HALT_DATE != today_utc_date:
+        # Reset halt state on new UTC day
+        _DAILY_HALT_DATE = None
+        print(f"[risk] New UTC day detected ({today_utc_date}). Daily Drawdown Circuit Breaker reset.")
+
+    # 1. Blocked UTC Hours Check
     current_utc_hour = datetime.now(timezone.utc).hour
     if current_utc_hour in cfg.get("blocked_utc_hours", []):
         print(f"[scanner] Current UTC hour ({current_utc_hour}) is blocked in bot_config. Skipping scan.")
@@ -1901,14 +2016,13 @@ def scan_and_execute_signals(
     if is_zero_balance_mode and _SCAN_HEARTBEAT_COUNT % 4 == 1:
         print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits across {exchange_mode.upper()} targets. Candidate setups are paper-tracked without live margin orders.")
 
+    # P10 FIX: Filter eligible targets and prefetch OHLCV in parallel across symbols
+    eligible_targets: List[Tuple[str, str, Any, str, bool]] = []
     for symbol, exchange_name, exchange in scan_targets:
         if symbol in quarantined_symbols:
             continue
 
         is_fx = is_forex_symbol(symbol)
-        asset_class = "commodity" if ("XAU" in symbol or "XAG" in symbol) else ("forex" if is_fx else "crypto")
-
-        # Forex Safeguards: Weekend Shield & Rollover Blackout
         if is_fx:
             if cfg.get("forex_weekend_shield", True):
                 is_open, open_reason = is_forex_market_open()
@@ -1925,26 +2039,43 @@ def scan_and_execute_signals(
                     continue
 
         ex_sym = resolve_exchange_symbol(exchange, symbol)
-        if exchange and hasattr(exchange, "markets") and exchange.markets and ex_sym not in exchange.markets:
-            # Secondary check: does exchange know this symbol under an alternative key format?
-            found_sym = None
-            for alt_cand in (
-                ex_sym.split(":")[0] if ":" in ex_sym else ex_sym,
-                ex_sym.replace("/USDT:USDT", "USDT"),
-                ex_sym.replace("/USDT", "USDT"),
-                ex_sym.replace("/", ""),
-                symbol.replace("/", "") + "USDT"
-            ):
-                if alt_cand in exchange.markets:
-                    found_sym = alt_cand
-                    break
-            if found_sym:
-                ex_sym = found_sym
-            else:
-                if _SCAN_HEARTBEAT_COUNT % 12 == 1:
-                    mt5_note = " (requires Bybit MT5 account for traditional CFDs)" if is_fx else ""
-                    print(f"[scanner] Notice: {symbol} is not listed on {exchange_name} Unified Trading Account{mt5_note}. Skipping.")
-                continue
+        eligible_targets.append((symbol, exchange_name, exchange, ex_sym, is_fx))
+
+    # P10 FIX: Parallel OHLCV & Market Data Prefetching
+    def _fetch_target_bundle(tgt: Tuple[str, str, Any, str, bool]) -> Tuple[str, Optional[Dict[str, Any]]]:
+        sym, ex_name, ex, ex_s, fx_flag = tgt
+        try:
+            ohlcv_15m = ex.fetch_ohlcv(ex_s, timeframe="15m", limit=100)
+            if not ohlcv_15m or len(ohlcv_15m) < 55:
+                return sym, None
+            ohlcv_1h_data = get_cached_ohlcv(ex, ex_s, timeframe="1h", limit=70, ttl_sec=600)
+            ohlcv_4h_data = get_cached_ohlcv(ex, ex_s, timeframe="4h", limit=50, ttl_sec=1800)
+            ohlcv_1d_data = get_cached_ohlcv(ex, ex_s, timeframe="1d", limit=50, ttl_sec=3600)
+            oi_info = get_cached_open_interest(ex, ex_s, ttl_sec=180) if not fx_flag else {"open_interest": None, "open_interest_usd": None}
+            return sym, {
+                "ohlcv": ohlcv_15m,
+                "ohlcv_1h": ohlcv_1h_data,
+                "ohlcv_4h": ohlcv_4h_data,
+                "ohlcv_1d": ohlcv_1d_data,
+                "oi_info": oi_info
+            }
+        except Exception:
+            return sym, None
+
+    prefetched_bundles: Dict[str, Any] = {}
+    if eligible_targets:
+        with ThreadPoolExecutor(max_workers=min(len(eligible_targets), 6)) as prefetcher:
+            futures = [prefetcher.submit(_fetch_target_bundle, t) for t in eligible_targets]
+            for f in as_completed(futures):
+                try:
+                    s_key, b_data = f.result(timeout=10)
+                    if b_data:
+                        prefetched_bundles[s_key] = b_data
+                except Exception:
+                    pass
+
+    for symbol, exchange_name, exchange, ex_sym, is_fx in eligible_targets:
+        asset_class = "commodity" if ("XAU" in symbol or "XAG" in symbol) else ("forex" if is_fx else "crypto")
 
         try:
             # Check if there is already an open trade for this symbol
@@ -1952,11 +2083,11 @@ def scan_and_execute_signals(
             if existing.data and len(existing.data) > 0:
                 continue
 
-            # Fetch 15m OHLCV bars
-            ohlcv = exchange.fetch_ohlcv(ex_sym, timeframe="15m", limit=100)
-            if not ohlcv or len(ohlcv) < 55:
+            bundle = prefetched_bundles.get(symbol)
+            if not bundle:
                 continue
 
+            ohlcv = bundle["ohlcv"]
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             latest_price = float(df["close"].iloc[-1])
@@ -1965,18 +2096,36 @@ def scan_and_execute_signals(
             # Store in-memory 15m frame for cross-pair SMT and trailing stops
             _LTF_15M_CACHE[symbol] = df
 
-            # Fetch Multi-Timeframe 1H and 4H OHLCV with in-memory TTL caching (Top-Down Architecture)
-            ohlcv_1h = get_cached_ohlcv(exchange, ex_sym, timeframe="1h", limit=70, ttl_sec=600)
+            # Multi-Timeframe 1H, 4H, and 1D DataFrames (P2 FIX: True Institutional Top-Down Context)
+            ohlcv_1h = bundle["ohlcv_1h"]
             df_1h = None
             if ohlcv_1h and len(ohlcv_1h) >= 20:
                 df_1h = pd.DataFrame(ohlcv_1h, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df_1h["timestamp"] = pd.to_datetime(df_1h["timestamp"], unit="ms")
 
-            ohlcv_4h = get_cached_ohlcv(exchange, ex_sym, timeframe="4h", limit=50, ttl_sec=1800)
+            ohlcv_4h = bundle["ohlcv_4h"]
             df_4h = None
             if ohlcv_4h and len(ohlcv_4h) >= 20:
                 df_4h = pd.DataFrame(ohlcv_4h, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df_4h["timestamp"] = pd.to_datetime(df_4h["timestamp"], unit="ms")
+
+            ohlcv_1d = bundle["ohlcv_1d"]
+            df_1d = None
+            if ohlcv_1d and len(ohlcv_1d) >= 15:
+                df_1d = pd.DataFrame(ohlcv_1d, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df_1d["timestamp"] = pd.to_datetime(df_1d["timestamp"], unit="ms")
+
+            # P5 FIX: Open Interest
+            oi_info = bundle["oi_info"]
+
+            # P3 FIX: Currency-Specific Macro Blackout Check (e.g. GBP for GBP/USD, EUR for EUR/USD)
+            macro_status = check_usd_macro_blackout(symbol=symbol)
+            if macro_status.get("macro_blackout"):
+                ev_title = macro_status.get("active_or_upcoming_event")
+                mins = macro_status.get("minutes_to_event")
+                if _SCAN_HEARTBEAT_COUNT % 6 == 1:
+                    print(f"[scanner] Skipping {symbol}: Currency Macro Blackout Active ({ev_title}, {mins}m).")
+                continue
 
             # Resolve institutional correlated partner (EUR<->GBP, Gold<->Silver, BTC<->ETH)
             corr_sym = CORRELATED_PAIR_MAP.get(symbol)
@@ -1994,8 +2143,8 @@ def scan_and_execute_signals(
                     except Exception:
                         corr_df = None
 
-            # Calculate institutional Top-Down Market Structure across 4H, 1H, and 15m
-            top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h, symbol=symbol, correlated_df=corr_df)
+            # Calculate institutional Top-Down Market Structure across Daily, 4H, 1H, and 15m (P2 FIX)
+            top_down_context = calc_top_down_structure(ind_df, df_1h=df_1h, df_4h=df_4h, df_1d=df_1d, symbol=symbol, correlated_df=corr_df)
 
             # Check funding rate or spread
             funding_rate = 0.0
@@ -2037,23 +2186,25 @@ def scan_and_execute_signals(
             # Dynamic Target Reward-to-Risk Ratio from Admin Settings (e.g. 1:2.5, 1:3.0, 1:5.0)
             target_rr = float(cfg.get("target_rr", 2.5) or 2.5)
 
-            # Evaluate strategies with full Top-Down 4H -> 1H -> 15m Price Action and dynamic RRR
+            # Evaluate strategies with full Top-Down Daily -> 4H -> 1H -> 15m Price Action (P2 FIX)
             candidate_setups = evaluate_enabled_strategies(
                 df,
                 active_strats,
                 ind_df=ind_df,
                 df_1h=df_1h,
                 df_4h=df_4h,
+                df_1d=df_1d,
                 top_down_context=top_down_context,
                 target_rr=target_rr
             )
             if not candidate_setups:
                 if _SCAN_HEARTBEAT_COUNT % 4 == 0:
                     unit_label = f"(${format_price_dynamic(latest_price)})"
+                    d1_b = top_down_context.get("daily_1d", {}).get("bias", "NEUTRAL")
                     h4_b = top_down_context["htf_4h"]["bias"]
                     h1_z = top_down_context["itf_1h"]["zone"]
                     h1_d = top_down_context["itf_1h"]["range_depth_pct"]
-                    print(f"[scanner] {symbol} {unit_label} [{exchange_name.upper()}] -> Top-Down checked (4H: {h4_b}, 1H: {h1_z} {h1_d}%). No valid trigger on current bar. Monitoring...")
+                    print(f"[scanner] {symbol} {unit_label} [{exchange_name.upper()}] -> Top-Down checked (1D: {d1_b}, 4H: {h4_b}, 1H: {h1_z} {h1_d}%). No valid trigger on current bar. Monitoring...")
                 continue
 
             print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} ({exchange_name.upper()}, Price: ${format_price_dynamic(latest_price)})!")
@@ -2069,8 +2220,8 @@ def scan_and_execute_signals(
                 strat_name = setup.get("strategy_name")
                 risk_pct = float(cfg.get("risk_pct", 0.01))
 
-                # Check portfolio directional risk lock
-                if not check_correlated_exposure(supabase, side, risk_pct, cfg.get("max_directional_exposure_pct", 0.015)):
+                # Check portfolio directional & currency-component risk lock (P9 FIX)
+                if not check_correlated_exposure(supabase, symbol, side, risk_pct, cfg.get("max_directional_exposure_pct", 0.015)):
                     continue
 
                 # Check if this exact setup has already been audited on this 15m candle
@@ -2106,8 +2257,9 @@ def scan_and_execute_signals(
 
                 session_info = get_forex_session_regime() if is_fx else None
 
-                # DeepSeek / Gemini Audit Prompt construction with Top-Down Telemetry
+                # DeepSeek / Gemini Audit Prompt construction with Top-Down Telemetry (P2 & P5 FIX)
                 daily_b = top_down_context.get("daily_benchmarks", {})
+                daily_1d_info = top_down_context.get("daily_1d", {})
                 asian_b = top_down_context.get("asian_range", {})
                 smt_b = top_down_context.get("smt_divergence", {})
 
@@ -2125,16 +2277,22 @@ def scan_and_execute_signals(
                     "setup_notes": setup["setup_notes"],
                     "relative_volume_rvol": rvol,
                     "funding_rate_pct": funding_rate,
+                    "open_interest": oi_info.get("open_interest"),
+                    "open_interest_value_usd": oi_info.get("open_interest_usd"),
                     "broker_spread_pips": spread_pips,
                     "forex_session_context": f"{session_info['session_name']} - {session_info['description']}" if session_info else "24/7 Continuous Crypto Market",
                     "cross_pair_smt_divergence": smt_b.get("description", "None"),
                     "asian_range_benchmarks": f"High: ${format_price_dynamic(asian_b['asian_high'])}, Low: ${format_price_dynamic(asian_b['asian_low'])}, Span: {asian_b.get('asian_range_pips', 0)} pips" if asian_b.get("is_valid_range") else "N/A",
                     "previous_day_benchmarks": f"PDH: ${format_price_dynamic(daily_b['pdh'])}, PDL: ${format_price_dynamic(daily_b['pdl'])}, Range: {daily_b.get('daily_range_pips', 0)} pips" if daily_b.get("has_benchmarks") else "N/A",
+                    "daily_macro_bias": daily_1d_info.get("bias", "NEUTRAL"),
+                    "daily_key_support": daily_1d_info.get("key_support"),
+                    "daily_key_resistance": daily_1d_info.get("key_resistance"),
                     "top_down_4h_bias": top_down_context["htf_4h"]["bias"],
                     "top_down_1h_zone": f"{top_down_context['itf_1h']['zone']} ({top_down_context['itf_1h']['range_depth_pct']}% of range, Equilibrium: ${format_price_dynamic(top_down_context['itf_1h']['equilibrium'])})",
                     "optimal_trade_entry_fib": "YES (61.8% - 78.6% Fib Retracement)" if top_down_context["itf_1h"]["is_ote"] else "NEUTRAL",
                     "htf_regime_context": (
-                        f"Top-Down Price Action: 4H Macro [{top_down_context['htf_4h']['bias']}] | "
+                        f"Top-Down Price Action: 1D Daily [{daily_1d_info.get('bias', 'NEUTRAL')}] | "
+                        f"4H Macro [{top_down_context['htf_4h']['bias']}] | "
                         f"1H Dealing Zone: [{top_down_context['itf_1h']['zone']} at {top_down_context['itf_1h']['range_depth_pct']}% depth, 50% Equilibrium: ${format_price_dynamic(top_down_context['itf_1h']['equilibrium'])}] | "
                         f"24h Trend Status: {htf_status}"
                     ),
@@ -2165,6 +2323,8 @@ def scan_and_execute_signals(
                         "rvol": rvol,
                         "atr": float(ind_df["atr_14"].iloc[-1]) if "atr_14" in ind_df.columns and pd.notnull(ind_df["atr_14"].iloc[-1]) else None,
                         "funding_rate": funding_rate,
+                        "open_interest": oi_info.get("open_interest"),
+                        "open_interest_usd": oi_info.get("open_interest_usd"),
                         "spread_pips": spread_pips,
                         "htf_status": htf_status
                     }
@@ -2229,6 +2389,8 @@ def scan_and_execute_signals(
                         "tp": setup["tp"],
                         "rvol": rvol,
                         "funding_rate": funding_rate,
+                        "open_interest": oi_info.get("open_interest"),
+                        "open_interest_usd": oi_info.get("open_interest_usd"),
                         "spread_pips": spread_pips
                     },
                     "news_context": headlines
@@ -2243,6 +2405,13 @@ def scan_and_execute_signals(
                 # --- POSITION SIZING ---
                 size_multiplier = 1.0 if total_score >= 80 else 0.5
                 effective_risk_pct = risk_pct * size_multiplier
+
+                # P13 FIX: Equity Curve Drawdown Reducer
+                drawdown_from_peak = abs(float(account_info.get("drawdown_from_peak_pct", 0.0) or 0.0))
+                if drawdown_from_peak >= 10.0 and equity > 0:
+                    effective_risk_pct = effective_risk_pct * 0.5
+                    print(f"[risk] Equity Drawdown Reducer Active: Drawdown is {drawdown_from_peak:.1f}% from peak. Position risk halved to {effective_risk_pct*100:.2f}%.")
+
                 nominal_equity = equity if equity > 0 else 10000.0
                 entry_price = float(setup["entry"])
                 sl_price = float(setup["sl"])
@@ -2267,7 +2436,7 @@ def scan_and_execute_signals(
 
                 is_simulated = is_zero_balance_mode or cfg.get("sandbox_mode", True)
 
-                # --- ORDER DISPATCH / ANALYTICAL LOGGING ---
+                # --- ORDER DISPATCH / ANALYTICAL LOGGING (P4 FIX: GTC Resting Limit at FVG/OB) ---
                 order_side = "buy" if side == "LONG" else "sell"
                 opp_side = "sell" if side == "LONG" else "buy"
                 exchange_order_id = "mock_order_1"
@@ -2283,14 +2452,16 @@ def scan_and_execute_signals(
                 else:
                     print(f"[execution] Live {exchange_name.upper()} Order Dispatch for {side} on {symbol}: Qty {position_qty}, Score {total_score}/100")
                     try:
-                        if cfg.get("use_limit_maker_entry", True):
+                        use_limit = cfg.get("use_limit_maker_entry", True) or (setup.get("entry_type") == "LIMIT")
+                        if use_limit:
+                            # P4 FIX: GTC resting limit order at FVG / OB midpoint instead of taker market order
                             entry_order = exchange.create_order(
                                 symbol=ex_sym,
                                 type="LIMIT" if exchange_name == "binance" else "limit",
                                 side=order_side,
                                 amount=position_qty,
                                 price=entry_price,
-                                params={"timeInForce": "GTX"} if exchange_name == "binance" else {"postOnly": True}
+                                params={"timeInForce": "GTC"} if exchange_name == "binance" else {"timeInForce": "GTC"}
                             )
                             exchange_order_id = str(entry_order.get("id"))
                         else:

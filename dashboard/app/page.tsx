@@ -77,10 +77,12 @@ import {
   Globe,
   PanelLeftClose,
   PanelLeftOpen,
+  History,
 } from "lucide-react";
 
 import LiveTradeChart from "./components/LiveTradeChart";
 import TradingJournal from "./components/TradingJournal";
+import BacktestView from "./components/BacktestView";
 
 // --- TYPES ---
 interface BotConfig {
@@ -267,6 +269,7 @@ type NavSection =
   | "chart"
   | "journal"
   | "strategies"
+  | "backtest"
   | "autopsies"
   | "settings"
   | "overview"
@@ -1599,6 +1602,25 @@ export default function CommandCenterPage() {
               <TrendingUp className={`w-4 h-4 text-brand-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
               {!sidebarCollapsed && <span>Strategy Analytics</span>}
             </button>
+
+            {/* 6. Backtest Lab */}
+            <button
+              onClick={() => {
+                setActiveSection("backtest");
+                setMobileMenuOpen(false);
+              }}
+              title="1-Year Historical Backtest Lab"
+              className={`flex w-full items-center rounded-md text-sm font-medium transition-colors cursor-pointer mt-1 ${
+                sidebarCollapsed ? "justify-center p-2.5" : "px-3 py-2"
+              } ${
+                activeSection === "backtest"
+                  ? "bg-brand-50 text-brand-600 font-semibold shadow-2xs"
+                  : "text-textMuted hover:text-textMain hover:bg-slate-50"
+              }`}
+            >
+              <History className={`w-4 h-4 text-emerald-600 shrink-0 ${!sidebarCollapsed ? "mr-3" : ""}`} />
+              {!sidebarCollapsed && <span>Backtest Lab</span>}
+            </button>
           </div>
 
           {/* Section 2: Market Intelligence */}
@@ -1788,6 +1810,7 @@ export default function CommandCenterPage() {
               {activeSection === "overview" && "Executive Telemetry & Balance"}
               {activeSection === "positions" && "Live Positions"}
               {activeSection === "strategies" && "Strategy Leaderboard"}
+              {activeSection === "backtest" && "Institutional Backtest Lab"}
               {activeSection === "news" && "Market & Macro News"}
               {activeSection === "audits" && "DeepSeek Audits"}
               {activeSection === "autopsies" && "AI Self-Learning & Autopsies"}
@@ -2700,6 +2723,13 @@ export default function CommandCenterPage() {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: INSTITUTIONAL BACKTEST LAB (1-YEAR REAL HISTORICAL) */}
+          {/* ========================================================================= */}
+          {activeSection === "backtest" && (
+            <BacktestView />
           )}
 
           {/* ========================================================================= */}
