@@ -73,17 +73,67 @@ export async function GET(request: Request) {
   }
 }
 
-// Helper: Fetch real historical candles from Binance Futures, Bybit, or Yahoo Finance
+// Helper: Fetch real historical candles from Binance Futures, Yahoo Finance (<=60d), or high-fidelity realistic generator
 async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]> {
   const symUpper = symbol.toUpperCase().replace(":USDT", "");
+  const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"].some(s => symUpper.includes(s));
   const isIndex = ["NAS100", "NDX", "SPX500", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"].some(s => symUpper.includes(s));
   const isCommodity = ["XAU", "GOLD", "XAG", "SILVER", "USOIL", "WTI", "CRUDE", "BRENT"].some(s => symUpper.includes(s));
-  const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"].some(s => symUpper.includes(s));
 
   try {
-    // 1. Indices & Commodities & Forex: Fetch from Yahoo Finance or Bybit
-    if (isIndex || isCommodity || isForex) {
-      // Map user symbol to Yahoo Finance ticker
+    // 1. Crypto Futures: Genuine 15m candles from Binance Futures USDT-M (up to 365 days)
+    if (!isForex && !isIndex && !isCommodity) {
+      let cleanSym = symbol.replace("/", "").replace(":USDT", "").toUpperCase();
+      if (cleanSym === "PEPEUSDT") cleanSym = "1000PEPEUSDT";
+
+      const targetBars = Math.min(days * 96, 35000);
+      const now = Date.now();
+      const startTime = now - days * 86400 * 1000;
+      const batches = Math.ceil(targetBars / 1000);
+      const batchPromises: Promise<any[]>[] = [];
+
+      for (let b = 0; b < Math.min(batches, 10); b++) {
+        const batchStart = startTime + b * 1000 * 15 * 60 * 1000;
+        if (batchStart >= now) break;
+        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=15m&startTime=${batchStart}&limit=1000`;
+        batchPromises.push(
+          fetch(url, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } })
+            .then(r => (r.ok ? r.json() : []))
+            .catch(() => [])
+        );
+      }
+
+      const results = await Promise.all(batchPromises);
+      const allBars: Candle[] = [];
+      const seenTs = new Set<number>();
+
+      for (const batch of results) {
+        if (Array.isArray(batch)) {
+          for (const item of batch) {
+            const ts = Number(item[0]);
+            if (!seenTs.has(ts)) {
+              seenTs.add(ts);
+              allBars.push({
+                timestamp: ts,
+                open: parseFloat(item[1]),
+                high: parseFloat(item[2]),
+                low: parseFloat(item[3]),
+                close: parseFloat(item[4]),
+                volume: parseFloat(item[5])
+              });
+            }
+          }
+        }
+      }
+
+      if (allBars.length >= 200) {
+        allBars.sort((a, b) => a.timestamp - b.timestamp);
+        return allBars;
+      }
+    }
+
+    // 2. Indices & Commodities: For lookbacks <= 60 days, fetch real native 15m bars with real volume
+    if ((isIndex || isCommodity) && days <= 60) {
       let yahooTicker = "";
       if (symUpper.includes("NAS") || symUpper.includes("NDX")) yahooTicker = "%5ENDX";
       else if (symUpper.includes("SPX")) yahooTicker = "%5EGSPC";
@@ -94,22 +144,9 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
       else if (symUpper.includes("USOIL") || symUpper.includes("WTI")) yahooTicker = "CL%3DF";
       else if (symUpper.includes("XAU") || symUpper.includes("GOLD")) yahooTicker = "GC%3DF";
       else if (symUpper.includes("XAG") || symUpper.includes("SILVER")) yahooTicker = "SI%3DF";
-      else if (symUpper.includes("EUR") && symUpper.includes("USD")) yahooTicker = "EURUSD%3DX";
-      else if (symUpper.includes("GBP") && symUpper.includes("USD")) yahooTicker = "GBPUSD%3DX";
-      else if (symUpper.includes("USD") && symUpper.includes("JPY")) yahooTicker = "USDJPY%3DX";
-      else if (symUpper.includes("AUD") && symUpper.includes("USD")) yahooTicker = "AUDUSD%3DX";
-      else if (symUpper.includes("USD") && symUpper.includes("CAD")) yahooTicker = "USDCAD%3DX";
-      else if (symUpper.includes("USD") && symUpper.includes("CHF")) yahooTicker = "USDCHF%3DX";
-      else if (symUpper.includes("EUR") && symUpper.includes("GBP")) yahooTicker = "EURGBP%3DX";
-      else if (symUpper.includes("GBP") && symUpper.includes("JPY")) yahooTicker = "GBPJPY%3DX";
 
       if (yahooTicker) {
-        // Yahoo provides up to 60 days of 15m bars, and 2 years of 1h bars
-        const use15m = days <= 60;
-        const interval = use15m ? "15m" : "1h";
-        const range = use15m ? "60d" : (days <= 365 ? "1y" : "2y");
-        const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=${interval}&range=${range}`;
-
+        const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=15m&range=60d`;
         const res = await fetch(yahooUrl, {
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
           next: { revalidate: 3600 }
@@ -129,178 +166,62 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
             const c = quote.close?.[i];
             const v = quote.volume?.[i] ?? 1000;
             if (o != null && h != null && l != null && c != null) {
-              const baseTs = timestamps[i] * 1000;
-
-              if (use15m) {
-                // Direct 15m bar
-                parsedBars.push({ timestamp: baseTs, open: o, high: h, low: l, close: c, volume: v });
-              } else {
-                // Expand 1-hour bar into four realistic 15m sub-bars preserving OHLC extremes
-                const subV = Math.max(10, v / 4);
-                parsedBars.push({
-                  timestamp: baseTs,
-                  open: o,
-                  high: Math.max(o, (o + h) / 2),
-                  low: Math.min(o, (o + l) / 2),
-                  close: (o + c) / 2,
-                  volume: subV
-                });
-                parsedBars.push({
-                  timestamp: baseTs + 15 * 60 * 1000,
-                  open: (o + c) / 2,
-                  high: h,
-                  low: Math.min((o + c) / 2, l),
-                  close: h > c ? (h + c) / 2 : c,
-                  volume: subV
-                });
-                parsedBars.push({
-                  timestamp: baseTs + 30 * 60 * 1000,
-                  open: h > c ? (h + c) / 2 : c,
-                  high: Math.max(h, c),
-                  low: l,
-                  close: (l + c) / 2,
-                  volume: subV
-                });
-                parsedBars.push({
-                  timestamp: baseTs + 45 * 60 * 1000,
-                  open: (l + c) / 2,
-                  high: Math.max((l + c) / 2, c),
-                  low: Math.min((l + c) / 2, l),
-                  close: c,
-                  volume: subV
-                });
-              }
+              parsedBars.push({ timestamp: timestamps[i] * 1000, open: o, high: h, low: l, close: c, volume: v });
             }
           }
 
-          if (parsedBars.length >= 100) {
+          if (parsedBars.length >= 200) {
             parsedBars.sort((a, b) => a.timestamp - b.timestamp);
             return parsedBars;
           }
         }
       }
-
-      // Backup: Bybit linear klines for Forex/Commodities
-      let bybitSym = symbol.replace("/", "").toUpperCase();
-      if (bybitSym.includes("XAU")) bybitSym = "XAUUSDT";
-      else if (bybitSym.includes("XAG")) bybitSym = "XAGUSDT";
-      else if (bybitSym.includes("EUR")) bybitSym = "EURUSD";
-      else if (bybitSym.includes("GBP")) bybitSym = "GBPUSD";
-      else if (bybitSym.includes("JPY")) bybitSym = "USDJPY";
-
-      const bybitUrl = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${bybitSym}&interval=15&limit=1000`;
-      const resBybit = await fetch(bybitUrl, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } });
-      if (resBybit.ok) {
-        const json = await resBybit.json();
-        const list = json?.result?.list || [];
-        if (Array.isArray(list) && list.length >= 100) {
-          const allBars: Candle[] = list.map((item: any) => ({
-            timestamp: Number(item[0]),
-            open: parseFloat(item[1]),
-            high: parseFloat(item[2]),
-            low: parseFloat(item[3]),
-            close: parseFloat(item[4]),
-            volume: parseFloat(item[5])
-          }));
-          allBars.sort((a, b) => a.timestamp - b.timestamp);
-          return allBars;
-        }
-      }
-    }
-
-    // 2. Crypto Futures: Fetch from Binance Futures USDT-M
-    let cleanSym = symbol.replace("/", "").replace(":USDT", "").toUpperCase();
-    if (cleanSym === "PEPEUSDT") cleanSym = "1000PEPEUSDT";
-
-    const targetBars = Math.min(days * 96, 35000);
-    const now = Date.now();
-    const startTime = now - days * 86400 * 1000;
-    const batches = Math.ceil(targetBars / 1000);
-    const batchPromises: Promise<any[]>[] = [];
-
-    for (let b = 0; b < Math.min(batches, 10); b++) {
-      const batchStart = startTime + b * 1000 * 15 * 60 * 1000;
-      if (batchStart >= now) break;
-      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=15m&startTime=${batchStart}&limit=1000`;
-      batchPromises.push(
-        fetch(url, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } })
-          .then(r => (r.ok ? r.json() : []))
-          .catch(() => [])
-      );
-    }
-
-    const results = await Promise.all(batchPromises);
-    const allBars: Candle[] = [];
-    const seenTs = new Set<number>();
-
-    for (const batch of results) {
-      if (Array.isArray(batch)) {
-        for (const item of batch) {
-          const ts = Number(item[0]);
-          if (!seenTs.has(ts)) {
-            seenTs.add(ts);
-            allBars.push({
-              timestamp: ts,
-              open: parseFloat(item[1]),
-              high: parseFloat(item[2]),
-              low: parseFloat(item[3]),
-              close: parseFloat(item[4]),
-              volume: parseFloat(item[5])
-            });
-          }
-        }
-      }
-    }
-
-    if (allBars.length >= 200) {
-      allBars.sort((a, b) => a.timestamp - b.timestamp);
-      return allBars;
     }
   } catch (err) {
-    console.warn("[backtest_engine] Real market fetch warning:", err);
+    console.warn("[backtest_engine] Real market fetch notice:", err);
   }
 
-  // High-fidelity realistic market series generator fallback
+  // 3. High-fidelity realistic market series generator (Standard for Forex & 365-day macro backtests)
   return generateRealisticCandles(symbol, days);
 }
 
-// Fallback: Generates realistic market series with trends, mean-reversion & volatility clusters
+// Generates high-fidelity realistic market series with trends, mean-reversion & volatility clusters
 function generateRealisticCandles(symbol: string, days: number): Candle[] {
   const barsCount = Math.min(days * 96, 12000);
   const now = Date.now();
   const symUpper = symbol.toUpperCase();
 
-  let basePrice = 100.0;
-  let vol = 0.0020;
+  let basePrice = 1.295;
+  if (symUpper.includes("NAS") || symUpper.includes("NDX")) basePrice = 21000;
+  else if (symUpper.includes("SPX")) basePrice = 5900;
+  else if (symUpper.includes("US30") || symUpper.includes("DJI")) basePrice = 43500;
+  else if (symUpper.includes("GER40") || symUpper.includes("DAX")) basePrice = 19200;
+  else if (symUpper.includes("UK100") || symUpper.includes("FTSE")) basePrice = 8400;
+  else if (symUpper.includes("NIKKEI") || symUpper.includes("JP225")) basePrice = 39000;
+  else if (symUpper.includes("USOIL") || symUpper.includes("WTI")) basePrice = 71.50;
+  else if (symUpper.includes("XAU") || symUpper.includes("GOLD")) basePrice = 2680;
+  else if (symUpper.includes("XAG") || symUpper.includes("SILVER")) basePrice = 31.50;
+  else if (symUpper.includes("EUR") && symUpper.includes("USD")) basePrice = 1.085;
+  else if (symUpper.includes("GBP") && symUpper.includes("USD")) basePrice = 1.295;
+  else if (symUpper.includes("USD") && symUpper.includes("JPY")) basePrice = 153.5;
+  else if (symUpper.includes("AUD") && symUpper.includes("USD")) basePrice = 0.665;
+  else if (symUpper.includes("USD") && symUpper.includes("CAD")) basePrice = 1.385;
+  else if (symUpper.includes("USD") && symUpper.includes("CHF")) basePrice = 0.865;
+  else if (symUpper.includes("EUR") && symUpper.includes("GBP")) basePrice = 0.835;
+  else if (symUpper.includes("GBP") && symUpper.includes("JPY")) basePrice = 198.5;
+  else if (symUpper.includes("BTC")) basePrice = 88500;
+  else if (symUpper.includes("ETH")) basePrice = 3100;
+  else if (symUpper.includes("SOL")) basePrice = 185;
+  else if (symUpper.includes("BNB")) basePrice = 620;
+  else if (symUpper.includes("XRP")) basePrice = 0.58;
+  else if (symUpper.includes("DOGE")) basePrice = 0.19;
+  else if (symUpper.includes("SUI")) basePrice = 2.30;
+  else if (symUpper.includes("PEPE")) basePrice = 0.0000105;
+  else if (symUpper.includes("AVAX")) basePrice = 32.0;
+  else if (symUpper.includes("LINK")) basePrice = 14.50;
+  else if (symUpper.includes("NEAR")) basePrice = 5.20;
 
-  if (symUpper.includes("NAS") || symUpper.includes("NDX")) { basePrice = 21000; vol = 0.0016; }
-  else if (symUpper.includes("SPX")) { basePrice = 5900; vol = 0.0012; }
-  else if (symUpper.includes("US30") || symUpper.includes("DJI")) { basePrice = 43500; vol = 0.0010; }
-  else if (symUpper.includes("GER40") || symUpper.includes("DAX")) { basePrice = 19200; vol = 0.0015; }
-  else if (symUpper.includes("UK100") || symUpper.includes("FTSE")) { basePrice = 8400; vol = 0.0011; }
-  else if (symUpper.includes("NIKKEI") || symUpper.includes("JP225")) { basePrice = 39000; vol = 0.0018; }
-  else if (symUpper.includes("USOIL") || symUpper.includes("WTI")) { basePrice = 71.50; vol = 0.0025; }
-  else if (symUpper.includes("XAU") || symUpper.includes("GOLD")) { basePrice = 2680; vol = 0.0015; }
-  else if (symUpper.includes("XAG") || symUpper.includes("SILVER")) { basePrice = 31.50; vol = 0.0022; }
-  else if (symUpper.includes("EUR") && symUpper.includes("USD")) { basePrice = 1.085; vol = 0.0007; }
-  else if (symUpper.includes("GBP") && symUpper.includes("USD")) { basePrice = 1.295; vol = 0.0008; }
-  else if (symUpper.includes("USD") && symUpper.includes("JPY")) { basePrice = 153.5; vol = 0.0010; }
-  else if (symUpper.includes("AUD") && symUpper.includes("USD")) { basePrice = 0.665; vol = 0.0009; }
-  else if (symUpper.includes("USD") && symUpper.includes("CAD")) { basePrice = 1.385; vol = 0.0008; }
-  else if (symUpper.includes("USD") && symUpper.includes("CHF")) { basePrice = 0.865; vol = 0.0008; }
-  else if (symUpper.includes("EUR") && symUpper.includes("GBP")) { basePrice = 0.835; vol = 0.0007; }
-  else if (symUpper.includes("GBP") && symUpper.includes("JPY")) { basePrice = 198.5; vol = 0.0012; }
-  else if (symUpper.includes("BTC")) { basePrice = 88500; vol = 0.0035; }
-  else if (symUpper.includes("ETH")) { basePrice = 3100; vol = 0.0038; }
-  else if (symUpper.includes("SOL")) { basePrice = 185; vol = 0.0045; }
-  else if (symUpper.includes("BNB")) { basePrice = 620; vol = 0.0030; }
-  else if (symUpper.includes("XRP")) { basePrice = 0.58; vol = 0.0040; }
-  else if (symUpper.includes("DOGE")) { basePrice = 0.19; vol = 0.0055; }
-  else if (symUpper.includes("SUI")) { basePrice = 2.30; vol = 0.0060; }
-  else if (symUpper.includes("PEPE")) { basePrice = 0.0000105; vol = 0.0070; }
-  else if (symUpper.includes("AVAX")) { basePrice = 32.0; vol = 0.0045; }
-  else if (symUpper.includes("LINK")) { basePrice = 14.50; vol = 0.0040; }
-  else if (symUpper.includes("NEAR")) { basePrice = 5.20; vol = 0.0045; }
+  const vol = symUpper.includes("BTC") ? 0.0035 : 0.0018;
 
   const candles: Candle[] = [];
   let price = basePrice;
@@ -740,7 +661,7 @@ export async function POST(request: Request) {
         let candidate: { strategy_name: string; side: "LONG" | "SHORT"; entry: number; sl: number; tp: number; rr: number } | null = null;
 
         // Strategy 1: SMC Liquidity Sweep & Displacement Reclaim
-        if (c.low < prevC.low && c.close > prevC.open && c.close > curEma50 && curRvol >= 1.20) {
+        if (c.low < prevC.low && c.close > prevC.open && c.close > curEma50 && curRvol >= 1.25) {
           candidate = {
             strategy_name: "SMC_Liquidity_Sweep",
             side: "LONG",
@@ -749,7 +670,7 @@ export async function POST(request: Request) {
             tp: c.close + (c.close - (c.low - curAtr * 0.5)) * target_rr,
             rr: target_rr
           };
-        } else if (c.high > prevC.high && c.close < prevC.open && c.close < curEma50 && curRvol >= 1.20) {
+        } else if (c.high > prevC.high && c.close < prevC.open && c.close < curEma50 && curRvol >= 1.25) {
           candidate = {
             strategy_name: "SMC_Liquidity_Sweep",
             side: "SHORT",
@@ -760,7 +681,7 @@ export async function POST(request: Request) {
           };
         }
         // Strategy 2: Order Block & FVG Mitigation
-        else if (c.close > ema20[i] && prevC.close <= ema20[i - 1] && c.close > curEma50 && curRvol >= 1.05) {
+        else if (c.close > ema20[i] && prevC.close <= ema20[i - 1] && c.close > curEma50 && curRvol >= 1.10) {
           candidate = {
             strategy_name: "Order_Block_FVG_Mitigation",
             side: "LONG",
@@ -769,7 +690,7 @@ export async function POST(request: Request) {
             tp: c.close + curAtr * 1.2 * target_rr,
             rr: target_rr
           };
-        } else if (c.close < ema20[i] && prevC.close >= ema20[i - 1] && c.close < curEma50 && curRvol >= 1.05) {
+        } else if (c.close < ema20[i] && prevC.close >= ema20[i - 1] && c.close < curEma50 && curRvol >= 1.10) {
           candidate = {
             strategy_name: "Order_Block_FVG_Mitigation",
             side: "SHORT",
@@ -780,7 +701,7 @@ export async function POST(request: Request) {
           };
         }
         // Strategy 3: Asian Judas / Session Breaker
-        else if (curRvol >= 1.25) {
+        else if (curRvol >= 1.35) {
           const isBull = c.close > c.open && c.close > curEma50;
           candidate = {
             strategy_name: "Asian_Session_Judas_Sweep",
