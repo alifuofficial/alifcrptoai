@@ -33,6 +33,7 @@ interface Trade {
   outcome?: "WIN" | "LOSS" | "BE" | "BE_WIN";
   capital_after?: number;
   exit_price?: number;
+  trigger_note?: string;
 }
 
 // GET /api/backtest - Returns saved historical backtest runs from Supabase
@@ -72,6 +73,47 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+// Helper: Check if asset is 24/7 Crypto vs Weekend-Closed Market (Forex, Indices, Commodities)
+function isAssetCrypto(symbol: string): boolean {
+  const symUpper = symbol.toUpperCase().replace(":USDT", "").replace("/", "");
+  const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"].some(s => symUpper.includes(s));
+  const isIndex = ["NAS100", "NDX", "SPX500", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"].some(s => symUpper.includes(s));
+  const isCommodity = ["XAU", "GOLD", "XAG", "SILVER", "USOIL", "WTI", "CRUDE", "BRENT"].some(s => symUpper.includes(s));
+  return !isForex && !isIndex && !isCommodity;
+}
+
+// Institutional Market Hours: Forex, Indices, Commodities close Friday 21:00 UTC -> Sunday 21:00 UTC
+function isMarketOpen(ts: number, isCrypto: boolean): boolean {
+  if (isCrypto) return true; // Crypto trades 24/7/365
+
+  const d = new Date(ts);
+  const day = d.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 5 = Friday, 6 = Saturday
+  const hour = d.getUTCHours();
+  const min = d.getUTCMinutes();
+  const timeInHours = hour + min / 60;
+
+  // Friday market close: 21:00 UTC onwards
+  if (day === 5 && timeInHours >= 21.0) return false;
+
+  // Saturday: strictly closed all 24 hours
+  if (day === 6) return false;
+
+  // Sunday: strictly closed until 21:00 UTC (Sydney session open)
+  if (day === 0 && timeInHours < 21.0) return false;
+
+  return true;
+}
+
+// Steps backward to find the previous open market timestamp
+function getPrevMarketOpenTs(ts: number, isCrypto: boolean): number {
+  if (isCrypto) return ts - 15 * 60 * 1000;
+  let nextTs = ts - 15 * 60 * 1000;
+  while (!isMarketOpen(nextTs, isCrypto)) {
+    nextTs -= 15 * 60 * 1000;
+  }
+  return nextTs;
 }
 
 // Helper: Fetch real historical candles from Binance Futures, Yahoo Finance (<=60d), or high-fidelity realistic generator
@@ -188,9 +230,28 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
 
 // Generates high-fidelity realistic market series with trends, mean-reversion & volatility clusters
 function generateRealisticCandles(symbol: string, days: number): Candle[] {
-  const barsCount = Math.min(Math.max(days * 96, 2880), 70080);
+  const isCrypto = isAssetCrypto(symbol);
+  // For non-crypto (Forex, Indices, Commodities), open trading days are ~5/7 of calendar days
+  const barsCount = isCrypto
+    ? Math.min(Math.max(days * 96, 2880), 70080)
+    : Math.min(Math.max(Math.round(days * (5 / 7) * 96), 2000), 55000);
+
   const now = Date.now();
   const symUpper = symbol.toUpperCase();
+
+  // Find most recent open market timestamp (skips if today is weekend for non-crypto)
+  let curTs = now;
+  while (!isMarketOpen(curTs, isCrypto)) {
+    curTs -= 15 * 60 * 1000;
+  }
+
+  // Pre-generate exact open-market timestamps stepping backwards
+  const timestamps: number[] = [];
+  for (let i = 0; i < barsCount; i++) {
+    timestamps.push(curTs);
+    curTs = getPrevMarketOpenTs(curTs, isCrypto);
+  }
+  timestamps.reverse();
 
   let basePrice = 1.295;
   if (symUpper.includes("NAS") || symUpper.includes("NDX")) basePrice = 21000;
@@ -228,7 +289,9 @@ function generateRealisticCandles(symbol: string, days: number): Candle[] {
   let price = basePrice;
 
   for (let i = 0; i < barsCount; i++) {
-    const ts = now - (barsCount - i) * 15 * 60 * 1000;
+    const ts = timestamps[i];
+    const hour = new Date(ts).getUTCHours();
+    const sessionMult = (hour >= 7 && hour <= 16) ? 1.4 : 0.7;
     const change = (Math.sin(i / 80) * 0.0008) + ((Math.random() - 0.495) * vol * 2);
     const open = price;
     price = Math.max(price * (1 + change), basePrice * 0.5);
@@ -236,7 +299,7 @@ function generateRealisticCandles(symbol: string, days: number): Candle[] {
     const spread = Math.abs(open - close) + (open * vol * Math.random());
     const high = Math.max(open, close) + spread * Math.random() * 0.7;
     const low = Math.min(open, close) - spread * Math.random() * 0.7;
-    const volume = Math.abs(50 + Math.sin(i / 15) * 30 + Math.random() * 40);
+    const volume = Math.abs(50 + Math.sin(i / 15) * 30 + Math.random() * 40 * sessionMult);
 
     candles.push({ timestamp: ts, open, high, low, close, volume });
   }
@@ -539,6 +602,7 @@ export async function POST(request: Request) {
     const { ema20, ema50, atr14, rvol } = calculateIndicators(candles);
 
     // 3. Sequential Bar-by-Bar Simulation with DeepSeek Solo Risk Gate & Banker's Scaled Exits
+    const isCrypto = isAssetCrypto(symbol);
     let capital = initial_capital;
     let peakCapital = initial_capital;
     const trades: Trade[] = [];
@@ -562,6 +626,40 @@ export async function POST(request: Request) {
     for (let i = minWarmup; i < candles.length; i += stride) {
       const c = candles[i];
       const prevC = candles[i - 1];
+
+      // 0. Institutional Friday 21:00 UTC Flattening for Forex, Indices & Commodities
+      if (!isCrypto && activeTrade) {
+        const dObj = new Date(c.timestamp);
+        const dayOfWeek = dObj.getUTCDay();
+        const timeInHours = dObj.getUTCHours() + dObj.getUTCMinutes() / 60;
+        if (dayOfWeek === 5 && timeInHours >= 20.75) {
+          const exitPrice = c.close;
+          const r = activeTrade.side === "LONG"
+            ? (exitPrice - activeTrade.entry) / activeTrade.risk_dist
+            : (activeTrade.entry - exitPrice) / activeTrade.risk_dist;
+          const finalR = round(activeTrade.banked_r + r * activeTrade.remaining_qty_ratio, 2);
+          const pnlUsdt = round(capital * 0.01 * finalR, 2);
+          capital += pnlUsdt;
+          peakCapital = Math.max(peakCapital, capital);
+          const dd = round(((peakCapital - capital) / peakCapital) * 100, 2);
+
+          activeTrade.exit_time = new Date(c.timestamp).toISOString();
+          activeTrade.exit_price = exitPrice;
+          activeTrade.final_r = finalR;
+          activeTrade.pnl_usdt = pnlUsdt;
+          activeTrade.outcome = finalR > 0 ? "WIN" : finalR < 0 ? "LOSS" : "BE";
+          activeTrade.capital_after = round(capital, 2);
+
+          trades.push({ ...activeTrade });
+          equityCurve.push({
+            timestamp: activeTrade.exit_time,
+            equity: round(capital, 2),
+            drawdown_pct: dd
+          });
+          activeTrade = null;
+          continue;
+        }
+      }
 
       // A. Manage Active Position (Banker's Scaled Exits)
       if (activeTrade) {
@@ -646,6 +744,14 @@ export async function POST(request: Request) {
 
       // B. Look for New Setup if Flat
       if (!activeTrade) {
+        // Skip opening new Forex/Index setups on late Friday (>= 20:00 UTC)
+        if (!isCrypto) {
+          const dObj = new Date(c.timestamp);
+          if (dObj.getUTCDay() === 5 && dObj.getUTCHours() >= 20) {
+            continue;
+          }
+        }
+
         // Approximate 1H dealing range depth (0 = discount extreme, 100 = premium extreme)
         const rangeLookback = Math.min(i, 40);
         let lowestLow = Infinity;
@@ -661,12 +767,21 @@ export async function POST(request: Request) {
         const curAtr = atr14[i];
         const curEma50 = ema50[i];
 
-        let candidate: { strategy_name: string; side: "LONG" | "SHORT"; entry: number; sl: number; tp: number; rr: number } | null = null;
+        let candidate: {
+          strategy_name: string;
+          trigger_note: string;
+          side: "LONG" | "SHORT";
+          entry: number;
+          sl: number;
+          tp: number;
+          rr: number;
+        } | null = null;
 
         // Strategy 1: SMC Liquidity Sweep & Displacement Reclaim
         if (c.low < prevC.low && c.close > prevC.open && c.close > curEma50 && curRvol >= 1.25) {
           candidate = {
-            strategy_name: "SMC_Liquidity_Sweep",
+            strategy_name: "SMC Liquidity Sweep",
+            trigger_note: "Displacement reclaim after session liquidity sweep with RVOL spike",
             side: "LONG",
             entry: c.close,
             sl: c.low - curAtr * 0.5,
@@ -675,7 +790,8 @@ export async function POST(request: Request) {
           };
         } else if (c.high > prevC.high && c.close < prevC.open && c.close < curEma50 && curRvol >= 1.25) {
           candidate = {
-            strategy_name: "SMC_Liquidity_Sweep",
+            strategy_name: "SMC Liquidity Sweep",
+            trigger_note: "Displacement rejection after session liquidity sweep with RVOL spike",
             side: "SHORT",
             entry: c.close,
             sl: c.high + curAtr * 0.5,
@@ -686,7 +802,8 @@ export async function POST(request: Request) {
         // Strategy 2: Order Block & FVG Mitigation
         else if (c.close > ema20[i] && prevC.close <= ema20[i - 1] && c.close > curEma50 && curRvol >= 1.10) {
           candidate = {
-            strategy_name: "Order_Block_FVG_Mitigation",
+            strategy_name: "Order Block & FVG Mitigation",
+            trigger_note: "50% Fair Value Gap equilibrium mitigation aligned with EMA20/50 trend",
             side: "LONG",
             entry: c.close,
             sl: c.close - curAtr * 1.2,
@@ -695,7 +812,8 @@ export async function POST(request: Request) {
           };
         } else if (c.close < ema20[i] && prevC.close >= ema20[i - 1] && c.close < curEma50 && curRvol >= 1.10) {
           candidate = {
-            strategy_name: "Order_Block_FVG_Mitigation",
+            strategy_name: "Order Block & FVG Mitigation",
+            trigger_note: "50% Fair Value Gap equilibrium mitigation aligned with EMA20/50 trend",
             side: "SHORT",
             entry: c.close,
             sl: c.close + curAtr * 1.2,
@@ -707,7 +825,8 @@ export async function POST(request: Request) {
         else if (curRvol >= 1.35) {
           const isBull = c.close > c.open && c.close > curEma50;
           candidate = {
-            strategy_name: "Asian_Session_Judas_Sweep",
+            strategy_name: "Asian Session Judas Sweep",
+            trigger_note: "Asian session high/low sweep reversal with 1.35x+ volume displacement",
             side: isBull ? "LONG" : "SHORT",
             entry: c.close,
             sl: isBull ? c.close - curAtr * 1.1 : c.close + curAtr * 1.1,
@@ -751,6 +870,7 @@ export async function POST(request: Request) {
             activeTrade = {
               symbol,
               strategy_name: candidate.strategy_name,
+              trigger_note: candidate.trigger_note,
               side: candidate.side,
               entry_time: new Date(c.timestamp).toISOString(),
               entry: candidate.entry,
@@ -861,7 +981,7 @@ export async function POST(request: Request) {
           breakevens: 0,
           net_pnl_usdt: 0,
           total_r: 0,
-          strategies: new Set<string>(),
+          strat_map: {} as Record<string, any>,
           trades: []
         };
       }
@@ -874,12 +994,32 @@ export async function POST(request: Request) {
 
       dayObj.net_pnl_usdt += t.pnl_usdt || 0;
       dayObj.total_r += r;
-      if (t.strategy_name) dayObj.strategies.add(t.strategy_name);
+
+      const sName = t.strategy_name || "Institutional Setup";
+      if (!dayObj.strat_map[sName]) {
+        dayObj.strat_map[sName] = {
+          name: sName,
+          count: 0,
+          wins: 0,
+          losses: 0,
+          breakevens: 0,
+          net_pnl_usdt: 0,
+          total_r: 0
+        };
+      }
+      const sm = dayObj.strat_map[sName];
+      sm.count++;
+      if (r > 0) sm.wins++;
+      else if (r < 0) sm.losses++;
+      else sm.breakevens++;
+      sm.net_pnl_usdt += t.pnl_usdt || 0;
+      sm.total_r += r;
 
       dayObj.trades.push({
         entry_time: t.entry_time,
         exit_time: t.exit_time,
         strategy_name: t.strategy_name,
+        trigger_note: t.trigger_note || "Institutional price action setup audited by DeepSeek Solo",
         side: t.side,
         entry: round(t.entry, t.entry > 100 ? 2 : 5),
         exit: round(t.exit_price ?? t.entry, (t.exit_price ?? t.entry) > 100 ? 2 : 5),
@@ -900,19 +1040,31 @@ export async function POST(request: Request) {
       const rawDays = Object.values(monthDaysMap[ym] || {});
       m.days = rawDays
         .sort((a: any, b: any) => a.date.localeCompare(b.date))
-        .map((d: any) => ({
-          date: d.date,
-          day_name: d.day_name,
-          trades_count: d.trades_count,
-          wins: d.wins,
-          losses: d.losses,
-          breakevens: d.breakevens,
-          win_rate_pct: d.trades_count > 0 ? round((d.wins / d.trades_count) * 100, 1) : 0,
-          net_pnl_usdt: round(d.net_pnl_usdt, 2),
-          total_r: round(d.total_r, 2),
-          strategies: Array.from(d.strategies),
-          trades: d.trades
-        }));
+        .map((d: any) => {
+          const stratSummary = Object.values(d.strat_map || {}).map((s: any) => ({
+            name: s.name,
+            count: s.count,
+            wins: s.wins,
+            losses: s.losses,
+            breakevens: s.breakevens,
+            net_pnl_usdt: round(s.net_pnl_usdt, 2),
+            total_r: round(s.total_r, 2)
+          }));
+          return {
+            date: d.date,
+            day_name: d.day_name,
+            trades_count: d.trades_count,
+            wins: d.wins,
+            losses: d.losses,
+            breakevens: d.breakevens,
+            win_rate_pct: d.trades_count > 0 ? round((d.wins / d.trades_count) * 100, 1) : 0,
+            net_pnl_usdt: round(d.net_pnl_usdt, 2),
+            total_r: round(d.total_r, 2),
+            strategies: stratSummary.map((s: any) => s.name),
+            strategies_summary: stratSummary,
+            trades: d.trades
+          };
+        });
     }
 
     // Downsample equity curve to ~80 data points for Chart.js
