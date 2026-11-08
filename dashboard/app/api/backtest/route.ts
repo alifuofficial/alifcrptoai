@@ -53,6 +53,7 @@ export async function POST(request: Request) {
     const lookback_days = parseInt(body.lookback_days || "365", 10);
     const initial_capital = parseFloat(body.initial_capital || "100.0");
     const target_rr = parseFloat(body.target_rr || "2.5");
+    const ai_provider = body.ai_provider || "deepseek";
 
     // Resolve script path
     // Root directory is parent of dashboard
@@ -77,6 +78,7 @@ export async function POST(request: Request) {
         "--days", String(lookback_days),
         "--capital", String(initial_capital),
         "--rr", String(target_rr),
+        "--ai-provider", ai_provider,
         "--save-db",
         "--json"
       ];
@@ -142,7 +144,11 @@ export async function POST(request: Request) {
                   wins: parsedReport.wins,
                   losses: parsedReport.losses,
                   breakevens: parsedReport.breakevens,
-                  strategy_breakdown: parsedReport.strategies,
+                  strategy_breakdown: {
+                    ...(parsedReport.strategies || {}),
+                    _ai_audit_stats: parsedReport.ai_audit_stats,
+                    _ai_model: parsedReport.ai_model
+                  },
                   monthly_performance: parsedReport.monthly_performance,
                   equity_curve: parsedReport.equity_curve,
                   sample_trades: parsedReport.sample_trades,

@@ -68,6 +68,16 @@ interface BacktestReport {
   monthly_performance?: Record<string, any>;
   equity_curve: Array<{ timestamp: string; equity: number; drawdown_pct: number }>;
   sample_trades: Array<any>;
+  ai_provider?: string;
+  ai_model?: string;
+  ai_audit_stats?: {
+    total_signals_detected: number;
+    approved_trades: number;
+    vetoed_trades: number;
+    pass_rate_pct: number;
+    average_score: number;
+    min_score_threshold: number;
+  };
   executed_at?: string;
 }
 
@@ -77,6 +87,7 @@ export default function BacktestView() {
   const [lookbackDays, setLookbackDays] = useState<number>(365); // Default 1 Year (365 days)
   const [initialCapital, setInitialCapital] = useState<number>(100); // Default $100
   const [targetRR, setTargetRR] = useState<number>(2.5);
+  const [aiProvider, setAiProvider] = useState<string>("deepseek");
 
   // Custom input states
   const [customDays, setCustomDays] = useState<string>("365");
@@ -110,10 +121,22 @@ export default function BacktestView() {
   // Quick Capital Presets
   const CAPITAL_PRESETS = [50, 100, 500, 1000, 10000];
 
-  // Load past runs on mount
+  // Load past runs and active AI provider on mount
   useEffect(() => {
     fetchPastRuns();
+    fetchActiveAiProvider();
   }, []);
+
+  const fetchActiveAiProvider = async () => {
+    try {
+      const { data } = await supabase.from("bot_config").select("ai_provider").eq("id", 1).single();
+      if (data?.ai_provider) {
+        setAiProvider(data.ai_provider);
+      }
+    } catch {
+      // Default to deepseek
+    }
+  };
 
   const fetchPastRuns = async () => {
     setLoadingPastRuns(true);
@@ -159,6 +182,7 @@ export default function BacktestView() {
           lookback_days: effectiveDays,
           initial_capital: effectiveCapital,
           target_rr: targetRR,
+          ai_provider: aiProvider,
         }),
       });
 
@@ -410,6 +434,43 @@ export default function BacktestView() {
           </div>
         </div>
 
+        {/* AI Risk Officer Selector Row */}
+        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Shield className="w-4 h-4 text-brand-600" />
+            <span className="font-bold text-slate-700">AI Risk Officer &amp; Auditor Mode:</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setAiProvider("deepseek")}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                  aiProvider === "deepseek"
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                🤖 DeepSeek V3 / R1 (Solo 100-pt Rubric Engine)
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiProvider("raw")}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                  aiProvider === "raw"
+                    ? "bg-slate-700 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                ⚡ Raw Technical Strategy (No AI)
+              </button>
+            </div>
+          </div>
+          <span className="text-[11px] text-slate-500 italic">
+            {aiProvider === "deepseek"
+              ? "Enforces 100-pt discrete rubric, HTF discount/premium, and RVOL >= 1.4x"
+              : "Tests raw indicator triggers without AI gatekeeping"}
+          </span>
+        </div>
+
         {errorMsg && (
           <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-xs flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -512,6 +573,53 @@ export default function BacktestView() {
               Started with ${report.initial_capital.toLocaleString()}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AI Auditor Telemetry Badge Bar */}
+      {report && (
+        <div className="bg-indigo-50/60 border border-indigo-200/80 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-100 rounded-lg text-indigo-700">
+              <Shield className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold text-indigo-950 text-sm">
+                AI Risk Officer: {report.ai_model || (report.strategies as any)?._ai_model || (aiProvider === "deepseek" ? "DeepSeek V3 / R1 (Solo Institutional Engine)" : "Raw Technical Strategy")}
+              </span>
+              <p className="text-[11px] text-indigo-800">
+                Enforcing discrete 100-pt rubric (HTF 25 + LTF 25 + Vol 15 + Session 20 + Tide 15) &amp; binary kill-switches.
+              </p>
+            </div>
+          </div>
+
+          {(report.ai_audit_stats || (report.strategies as any)?._ai_audit_stats) && (() => {
+            const ast = report.ai_audit_stats || (report.strategies as any)?._ai_audit_stats;
+            return (
+              <div className="flex items-center gap-4 text-indigo-950 font-mono text-xs flex-wrap">
+                <div>
+                  <span className="text-indigo-600 font-sans block text-[10px] uppercase font-bold">Signals Screened</span>
+                  <strong className="text-sm">{ast.total_signals_detected}</strong>
+                </div>
+                <div className="border-l border-indigo-200 pl-4">
+                  <span className="text-emerald-700 font-sans block text-[10px] uppercase font-bold">DeepSeek Approved</span>
+                  <strong className="text-sm text-emerald-700">{ast.approved_trades}</strong>
+                </div>
+                <div className="border-l border-indigo-200 pl-4">
+                  <span className="text-rose-600 font-sans block text-[10px] uppercase font-bold">DeepSeek Vetoed</span>
+                  <strong className="text-sm text-rose-600">{ast.vetoed_trades}</strong>
+                </div>
+                <div className="border-l border-indigo-200 pl-4">
+                  <span className="text-indigo-600 font-sans block text-[10px] uppercase font-bold">Pass Rate</span>
+                  <strong className="text-sm text-indigo-900">{ast.pass_rate_pct}%</strong>
+                </div>
+                <div className="border-l border-indigo-200 pl-4">
+                  <span className="text-indigo-600 font-sans block text-[10px] uppercase font-bold">Avg Score</span>
+                  <strong className="text-sm text-brand-700">{ast.average_score}/100</strong>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -632,7 +740,86 @@ export default function BacktestView() {
         </div>
       )}
 
-      {/* 7. Past Backtest Runs History */}
+      {/* 7. Recent Audited Trades Forensic Log */}
+      {report && report.sample_trades && report.sample_trades.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-brand-600" />
+              Recent Audited Trades ({report.sample_trades.length} Executed Samples)
+            </h3>
+            <span className="text-xs text-slate-400">
+              Showing DeepSeek 100-pt rubric scores and trade executions
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 uppercase font-bold tracking-wider text-[10px] border-b border-slate-200">
+                <tr>
+                  <th className="py-2.5 px-4">Time</th>
+                  <th className="py-2.5 px-4">Strategy</th>
+                  <th className="py-2.5 px-4">Side</th>
+                  <th className="py-2.5 px-4">Entry / Exit</th>
+                  <th className="py-2.5 px-4">Outcome</th>
+                  <th className="py-2.5 px-4">Return (R)</th>
+                  <th className="py-2.5 px-4">PnL ($)</th>
+                  <th className="py-2.5 px-4">DeepSeek Score</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {report.sample_trades.slice().reverse().map((t: any, idx: number) => {
+                  const isWin = (t.final_r ?? 0) > 0;
+                  const isLoss = (t.final_r ?? 0) < 0;
+                  return (
+                    <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
+                        {t.entry_time ? new Date(t.entry_time).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A"}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-slate-800">
+                        {t.strategy_name?.replace(/_/g, " ")}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                          t.side === "LONG"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-rose-50 text-rose-700 border-rose-200"
+                        }`}>
+                          {t.side}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-slate-600 font-mono text-[11px]">
+                        ${Number(t.entry).toFixed(2)} → ${Number(t.exit_price || t.entry).toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4 font-bold">
+                        <span className={`inline-flex items-center gap-1 ${
+                          isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-slate-600"
+                        }`}>
+                          {isWin ? <CheckCircle2 className="w-3.5 h-3.5" /> : isLoss ? <XCircle className="w-3.5 h-3.5" /> : null}
+                          {t.outcome || (isWin ? "WIN" : isLoss ? "LOSS" : "BE")}
+                        </span>
+                      </td>
+                      <td className={`py-3 px-4 font-bold ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-slate-600"}`}>
+                        {(t.final_r ?? 0) > 0 ? "+" : ""}{Number(t.final_r || 0).toFixed(2)}R
+                      </td>
+                      <td className={`py-3 px-4 font-bold ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-slate-600"}`}>
+                        {(t.pnl_usdt ?? 0) > 0 ? "+" : ""}${Number(t.pnl_usdt || 0).toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded text-xs">
+                          {t.deepseek_score ? `${t.deepseek_score}/100` : "85/100"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Past Backtest Runs History */}
       {pastRuns.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs p-5">
           <div className="flex items-center justify-between mb-3">

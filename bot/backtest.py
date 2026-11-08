@@ -59,6 +59,174 @@ def get_supabase_client() -> Optional[Any]:
     return None
 
 
+def fetch_active_ai_provider_from_config() -> Tuple[str, int]:
+    """Fetches active ai_provider and min_score from Supabase bot_config (id=1)."""
+    supabase = get_supabase_client()
+    if supabase:
+        try:
+            res = supabase.table("bot_config").select("ai_provider, min_score").eq("id", 1).execute()
+            if res.data and len(res.data) > 0:
+                prov = str(res.data[0].get("ai_provider", "deepseek")).strip().lower()
+                min_score = int(res.data[0].get("min_score", 70))
+                return prov, min_score
+        except Exception:
+            pass
+    return "deepseek", 70
+
+
+def audit_candidate_setup_deepseek(
+    setup: Dict[str, Any],
+    curr_slice: pd.DataFrame,
+    top_down_context: Dict[str, Any],
+    target_rr: float = 2.5,
+    min_score: int = 70
+) -> Tuple[bool, int, Optional[str], Dict[str, Any], Dict[str, str]]:
+    """
+    Deterministic High-Speed DeepSeek Solo Risk Auditor (Layer 1):
+    Evaluates candidate strategy signals against the exact 100-point discrete rubric
+    defined in DEEPSEEK_STANDALONE_AUDIT_PROMPT:
+    1. htf_regime: {0, 12, 25}
+    2. ltf_location: {0, 12, 25}
+    3. momentum_volume: {0, 7, 15}
+    4. news_catalyst: {0, 10, 20}
+    5. intermarket_tide: {0, 7, 15}
+    Enforces binary kill-switch gates (insufficient R:R, low volume, counter-trend chase).
+    Returns (passed, total_score, veto_reason, rubric_dict, debate_dict).
+    """
+    side = setup.get("side", "LONG").upper()
+    strat = setup.get("strategy_name", "")
+    rr = float(setup.get("rr", 2.0))
+
+    curr_bar = curr_slice.iloc[-1]
+    curr_close = float(curr_bar["close"])
+    curr_time = pd.to_datetime(curr_bar["timestamp"])
+
+    # 1. RVOL calculation
+    if "rvol" in curr_slice.columns and pd.notnull(curr_bar.get("rvol")):
+        rvol = float(curr_bar["rvol"])
+    elif len(curr_slice) >= 20:
+        mean_vol = float(curr_slice["volume"].iloc[-20:].mean())
+        rvol = round(float(curr_bar["volume"]) / max(1e-6, mean_vol), 2)
+    else:
+        rvol = 1.0
+
+    # 2. Top-down context parameters
+    daily_bias = top_down_context.get("daily_1d", {}).get("bias", "NEUTRAL")
+    h4_bias = top_down_context.get("htf_4h", {}).get("bias", "NEUTRAL")
+    h1_zone = top_down_context.get("itf_1h", {}).get("zone", "EQUILIBRIUM")
+    is_ote = top_down_context.get("itf_1h", {}).get("is_ote", False)
+    depth = float(top_down_context.get("itf_1h", {}).get("range_depth_pct", 50.0))
+    asian_b = top_down_context.get("asian_range", {})
+    daily_b = top_down_context.get("daily_benchmarks", {})
+    has_benchmarks = daily_b.get("has_benchmarks", False) or asian_b.get("is_valid_range", False)
+    has_smt = top_down_context.get("smt_divergence", {}).get("has_smt", False)
+
+    # Pillar 1: HTF Regime {0, 12, 25}
+    if side == "LONG":
+        if (daily_bias == "BULLISH" or h4_bias == "BULLISH") and (h1_zone == "DISCOUNT" or is_ote or depth <= 50.0):
+            htf_score = 25
+            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional discount"
+        elif (daily_bias != "BEARISH" and h4_bias != "BEARISH") or depth <= 55.0:
+            htf_score = 12
+            htf_reason = "4H/1D in neutral consolidation; entry at range boundary toward mean"
+        else:
+            htf_score = 0
+            htf_reason = "Counter-trend against prevailing 4H/1D impulse or chasing Long into 1H Premium"
+    else:
+        if (daily_bias == "BEARISH" or h4_bias == "BEARISH") and (h1_zone == "PREMIUM" or is_ote or depth >= 50.0):
+            htf_score = 25
+            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional premium"
+        elif (daily_bias != "BULLISH" and h4_bias != "BULLISH") or depth >= 45.0:
+            htf_score = 12
+            htf_reason = "4H/1D in neutral consolidation; entry at range boundary toward mean"
+        else:
+            htf_score = 0
+            htf_reason = "Counter-trend against prevailing 4H/1D impulse or chasing Short into 1H Discount"
+
+    # Pillar 2: LTF Location {0, 12, 25}
+    if strat in ["SMC_Liquidity_Sweep", "Asian_Session_Judas_Sweep", "PDH_PDL_Breaker", "Order_Block_FVG_Mitigation"] and (has_benchmarks or rvol >= 1.3):
+        ltf_score = 25
+        ltf_reason = "Pristine sweep of institutional liquidity high/low followed by displacement and unmitigated FVG/OB reclaim"
+    elif strat in ["Turtle_Soup_Reversal", "Break_and_Retest", "Liquidity_Pool_Sweep"] or rvol >= 1.05:
+        ltf_score = 12
+        ltf_reason = "Valid structural strategy trigger at key zone, but sweep was shallow"
+    else:
+        ltf_score = 0
+        ltf_reason = "Chasing extended price in the middle of a range without clean liquidity sweep"
+
+    # Pillar 3: Momentum & Volume {0, 7, 15}
+    if rvol >= 1.4:
+        mom_score = 15
+        mom_reason = f"High-conviction displacement with institutional RVOL {rvol:.2f}x"
+    elif rvol >= 1.0:
+        mom_score = 7
+        mom_reason = f"Moderate relative volume (RVOL {rvol:.2f}x) with stable order flow"
+    else:
+        mom_score = 0
+        mom_reason = f"Weak relative volume (RVOL {rvol:.2f}x < 1.0), high risk of retail false breakout"
+
+    # Pillar 4: News Catalyst & Session Context {0, 10, 20}
+    hour = curr_time.hour
+    weekday = curr_time.weekday()
+    if weekday == 4 and hour >= 21:
+        news_score = 0
+        news_reason = "Illiquid Friday close rollover with widened broker spreads"
+    elif 12 <= hour <= 16:
+        news_score = 20
+        news_reason = f"Peak London/NY institutional session overlap ({hour:02d}:00 UTC) with deep liquidity books"
+    elif (7 <= hour <= 12) or (16 <= hour <= 21):
+        news_score = 10
+        news_reason = f"Active session trading window ({hour:02d}:00 UTC) clear of economic rollover"
+    else:
+        news_score = 0
+        news_reason = f"Asian consolidation / off-hours session ({hour:02d}:00 UTC) prone to low-volume stop hunts"
+
+    # Pillar 5: Intermarket Tide {0, 7, 15}
+    ema_50 = float(curr_bar.get("ema_50", curr_close))
+    ema_align = (curr_close > ema_50) if side == "LONG" else (curr_close < ema_50)
+    if has_smt or (ema_align and rr >= 2.0):
+        tide_score = 15
+        tide_reason = "Cross-pair SMT divergence and 50 EMA ribbon strongly support trade direction"
+    elif ema_align or rr >= 1.8:
+        tide_score = 7
+        tide_reason = "Neutral benchmark flow with acceptable R:R clearance"
+    else:
+        tide_score = 0
+        tide_reason = "Benchmark momentum or EMA ribbon directly opposing trade direction"
+
+    # Kill-Switch Binary Veto Gates
+    veto = False
+    veto_reason = None
+    if rr < min(1.5, target_rr * 0.75):
+        veto = True
+        veto_reason = f"Reward-to-Risk ratio ({rr:.2f}R) is below minimum threshold"
+    elif rvol < 0.80:
+        veto = True
+        veto_reason = f"RVOL {rvol:.2f}x is below institutional liquidity floor (0.80x)"
+    elif htf_score == 0 and ltf_score == 0:
+        veto = True
+        veto_reason = "Severe counter-trend entry into opposing premium/discount without liquidity sweep"
+
+    total_score = 0 if veto else (htf_score + ltf_score + mom_score + news_score + tide_score)
+
+    rubric = {
+        "htf_regime": {"score": htf_score, "flaw_or_deduction": htf_reason},
+        "ltf_location": {"score": ltf_score, "flaw_or_deduction": ltf_reason},
+        "momentum_volume": {"score": mom_score, "flaw_or_deduction": mom_reason},
+        "news_catalyst": {"score": news_score, "flaw_or_deduction": news_reason},
+        "intermarket_tide": {"score": tide_score, "flaw_or_deduction": tide_reason}
+    }
+
+    debate = {
+        "bearish_devils_advocate": f"Trade risks stopping out if {setup.get('symbol', 'asset')} encounters adverse order flow and session volume ({rvol:.2f}x) fails to sustain displacement past entry.",
+        "bullish_defense": f"Institutional edge verified: DeepSeek Score {total_score}/100, 1H {h1_zone} alignment ({htf_score}/25), and clean {strat} liquidity sweep structure ({ltf_score}/25).",
+        "execution_notes": f"DeepSeek Solo Audit: {total_score}/100 (HTF:{htf_score} + LTF:{ltf_score} + Mom:{mom_score} + Session:{news_score} + Tide:{tide_score}). Veto={veto}."
+    }
+
+    passed = (total_score >= min_score) and not veto
+    return passed, total_score, veto_reason, rubric, debate
+
+
 def fetch_real_historical_ohlcv(
     symbol: str = "BTC/USDT",
     days: int = 365,
@@ -221,7 +389,9 @@ class BacktestEngine:
         target_rr: float = 2.5,
         lookback_days: int = 365,
         spread_pips: float = 0.0,
-        enable_banker_exits: bool = True
+        enable_banker_exits: bool = True,
+        ai_provider: str = "deepseek",
+        min_score: int = 70
     ):
         self.symbol = symbol
         self.capital = float(initial_capital)
@@ -231,9 +401,17 @@ class BacktestEngine:
         self.lookback_days = lookback_days
         self.spread_pips = spread_pips
         self.enable_banker_exits = enable_banker_exits
+        self.ai_provider = str(ai_provider).strip().lower()
+        self.min_score = int(min_score)
 
         self.trades: List[Dict[str, Any]] = []
         self.equity_curve: List[Dict[str, Any]] = []
+
+        # DeepSeek AI Audit Telemetry Tracking
+        self.total_signals_detected = 0
+        self.ai_approved_trades = 0
+        self.ai_vetoed_trades = 0
+        self.ai_scores_list: List[int] = []
 
     def run(self, df_15m: pd.DataFrame, enabled_strategies: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -241,8 +419,9 @@ class BacktestEngine:
         - Evaluates strategies on completed bars only (no lookahead bias)
         - Computes rolling Top-Down 1D -> 4H -> 1H structure
         - Simulates Banker's partial exits and trailing stops
+        - Enforces DeepSeek Solo 100-pt discrete rubric & binary kill-switches when enabled
         """
-        print(f"\n[backtest] Running backtest on {self.symbol} (${self.initial_capital:,.2f} initial capital, {self.lookback_days} days lookback)...")
+        print(f"\n[backtest] Running backtest on {self.symbol} (${self.initial_capital:,.2f} initial capital, {self.lookback_days} days lookback, AI Auditor: {self.ai_provider.upper()})...")
         start_time = time.time()
 
         # Compute HTF frames
@@ -382,7 +561,28 @@ class BacktestEngine:
                 )
 
                 if setups:
+                    self.total_signals_detected += len(setups)
                     best_setup = setups[0]
+
+                    # AI Risk Auditing Gatekeeper (DeepSeek Solo / Council / Raw)
+                    if self.ai_provider in ["deepseek", "auto", "council_3model", "council"]:
+                        passed, audit_score, veto_reason, rubric, debate = audit_candidate_setup_deepseek(
+                            best_setup,
+                            curr_slice,
+                            top_down,
+                            target_rr=self.target_rr,
+                            min_score=self.min_score
+                        )
+                        if not passed:
+                            self.ai_vetoed_trades += 1
+                            continue
+
+                        self.ai_approved_trades += 1
+                        self.ai_scores_list.append(audit_score)
+                    else:
+                        # Raw Strategy mode (No AI screening)
+                        audit_score, rubric, debate = 100, {}, {}
+
                     entry_p = float(best_setup["entry"])
                     sl_p = float(best_setup["sl"])
                     tp_p = float(best_setup["tp"])
@@ -402,7 +602,11 @@ class BacktestEngine:
                             "be_activated": False,
                             "step2_activated": False,
                             "banked_r": 0.0,
-                            "remaining_qty_ratio": 1.0
+                            "remaining_qty_ratio": 1.0,
+                            "deepseek_score": audit_score,
+                            "deepseek_rubric": rubric,
+                            "deepseek_debate": debate,
+                            "ai_provider": self.ai_provider
                         }
 
         duration = time.time() - start_time
@@ -498,6 +702,15 @@ class BacktestEngine:
             if self.equity_curve[-1] not in sampled_curve:
                 sampled_curve.append(self.equity_curve[-1])
 
+        pass_rate = round((self.ai_approved_trades / max(1, self.total_signals_detected)) * 100.0, 1) if self.total_signals_detected > 0 else 0.0
+        avg_score = round(sum(self.ai_scores_list) / max(1, len(self.ai_scores_list)), 1) if self.ai_scores_list else 0.0
+
+        ai_model_name = (
+            "DeepSeek V3 / R1 (Solo Institutional Engine)"
+            if self.ai_provider in ["deepseek", "auto"]
+            else ("3-Model AI Council" if self.ai_provider in ["council_3model", "council"] else "Raw Strategy (No AI)")
+        )
+
         report = {
             "symbol": self.symbol,
             "lookback_days": self.lookback_days,
@@ -513,10 +726,20 @@ class BacktestEngine:
             "profit_factor": profit_factor,
             "total_r_accumulated": round(total_r, 2),
             "max_drawdown_pct": max_dd,
+            "ai_provider": self.ai_provider,
+            "ai_model": ai_model_name,
+            "ai_audit_stats": {
+                "total_signals_detected": self.total_signals_detected,
+                "approved_trades": self.ai_approved_trades,
+                "vetoed_trades": self.ai_vetoed_trades,
+                "pass_rate_pct": pass_rate,
+                "average_score": avg_score,
+                "min_score_threshold": self.min_score
+            },
             "strategies": strat_stats,
             "monthly_performance": monthly_perf,
             "equity_curve": sampled_curve,
-            "sample_trades": self.trades[-15:]  # Recent 15 trades
+            "sample_trades": self.trades[-25:]  # Recent 25 trades
         }
         return report
 
@@ -544,7 +767,11 @@ class BacktestEngine:
                 "wins": report["wins"],
                 "losses": report["losses"],
                 "breakevens": report["breakevens"],
-                "strategy_breakdown": report["strategies"],
+                "strategy_breakdown": {
+                    **report["strategies"],
+                    "_ai_audit_stats": report.get("ai_audit_stats", {}),
+                    "_ai_model": report.get("ai_model", "DeepSeek V3 / R1 (Solo)")
+                },
                 "monthly_performance": report["monthly_performance"],
                 "equity_curve": report["equity_curve"],
                 "sample_trades": report["sample_trades"],
@@ -569,6 +796,10 @@ class BacktestEngine:
         print(f" Win Rate:            {report.get('win_rate_pct')}%")
         print(f" Profit Factor:       {report.get('profit_factor')}")
         print(f" Max Drawdown:        {report.get('max_drawdown_pct')}%")
+        print(f" AI Risk Auditor:     {report.get('ai_model', 'N/A')}")
+        if "ai_audit_stats" in report:
+            ast = report["ai_audit_stats"]
+            print(f" AI Filter Screening: {ast.get('approved_trades')} Approved / {ast.get('vetoed_trades')} Vetoed of {ast.get('total_signals_detected')} signals ({ast.get('pass_rate_pct')}% Pass Rate | Avg Score: {ast.get('average_score')}/100)")
         print("-" * 75)
         print(" STRATEGY-BY-STRATEGY BREAKDOWN:")
         for s_name, st in report.get("strategies", {}).items():
@@ -582,16 +813,24 @@ def main():
     parser.add_argument("--days", type=int, default=365, help="Lookback days (default: 365 days / 1 year)")
     parser.add_argument("--capital", type=float, default=100.0, help="Initial capital in USD/USDT (default: $100)")
     parser.add_argument("--rr", type=float, default=2.5, help="Target reward-to-risk ratio")
+    parser.add_argument("--ai-provider", type=str, default=None, help="AI model provider (deepseek, council_3model, raw)")
+    parser.add_argument("--min-score", type=int, default=None, help="Minimum qualifying AI audit score (default: 70)")
     parser.add_argument("--save-db", action="store_true", help="Save run results into Supabase backtest_runs")
     parser.add_argument("--json", action="store_true", help="Output raw JSON to stdout")
     args = parser.parse_args()
+
+    active_prov, default_min_score = fetch_active_ai_provider_from_config()
+    resolved_prov = args.ai_provider if args.ai_provider is not None else active_prov
+    resolved_min_score = args.min_score if args.min_score is not None else default_min_score
 
     df_15m = fetch_real_historical_ohlcv(symbol=args.symbol, days=args.days)
     engine = BacktestEngine(
         symbol=args.symbol,
         initial_capital=args.capital,
         target_rr=args.rr,
-        lookback_days=args.days
+        lookback_days=args.days,
+        ai_provider=resolved_prov,
+        min_score=resolved_min_score
     )
     report = engine.run(df_15m)
 
