@@ -83,7 +83,8 @@ from notifier import (
     notify_scaled_exit,
     notify_trade_closed,
     notify_strategy_quarantined,
-    notify_panic_activated
+    notify_panic_activated,
+    get_portfolio_performance_stats
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from prompts import (
@@ -680,6 +681,7 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         ],
         "timeframe": "15m",
         "risk_pct": 0.01,
+        "simulated_equity": 1000.0,
         "min_score": 75,
         "min_rvol": 1.0,
         "daily_loss_limit_pct": 2.5,        # P1 FIX: Daily drawdown circuit breaker threshold (-2.5%)
@@ -1581,7 +1583,8 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
         supabase.table("trade_executions").update({"autopsy_completed": True}).eq("id", trade["id"]).execute()
 
         # Dispatch Telegram notification
-        notify_trade_closed(cfg, trade, autopsy=autopsy_data)
+        current_stats = get_portfolio_performance_stats(supabase)
+        notify_trade_closed(cfg, trade, autopsy=autopsy_data, stats=current_stats)
         print(f"[autopsy] Successfully recorded session-tagged autopsy & lesson for trade #{trade['id']}.")
 
     except Exception as exc:
@@ -1605,6 +1608,8 @@ def manage_open_positions(
         open_trades = res.data or []
         if not open_trades:
             return
+
+        current_stats = get_portfolio_performance_stats(supabase)
 
         for t in open_trades:
             trade_id = t["id"]
@@ -1715,7 +1720,8 @@ def manage_open_positions(
 
                 notify_scaled_exit(
                     cfg, t, "Target 1 (+1.5R Milestone)", current_price,
-                    f"Banked 40% profit ({partial_qty} units). SL shifted to Risk-Free BE+Spread (${format_price_dynamic(be_sl_price)})."
+                    f"Banked 40% profit ({partial_qty} units). SL shifted to Risk-Free BE+Spread (${format_price_dynamic(be_sl_price)}).",
+                    stats=current_stats
                 )
                 continue
 
@@ -1773,7 +1779,8 @@ def manage_open_positions(
 
                 notify_scaled_exit(
                     cfg, t, "Target 2 (+3.0R Expansion)", current_price,
-                    f"Banked additional 30% profit. Remaining 30% runner Stop Loss locked at +1.5R (${format_price_dynamic(lock_sl_price)})."
+                    f"Banked additional 30% profit. Remaining 30% runner Stop Loss locked at +1.5R (${format_price_dynamic(lock_sl_price)}).",
+                    stats=current_stats
                 )
                 continue
 
@@ -1895,7 +1902,8 @@ def manage_open_positions(
                     "closed_at": datetime.now(timezone.utc).isoformat()
                 }
                 supabase.table("trade_executions").update(t_updated).eq("id", trade_id).execute()
-                notify_trade_closed(cfg, t_updated)
+                fresh_stats = get_portfolio_performance_stats(supabase)
+                notify_trade_closed(cfg, t_updated, stats=fresh_stats)
                 continue
 
             # --- CHECK SL / TP HIT ---
@@ -1936,11 +1944,12 @@ def manage_open_positions(
                     "closed_at": datetime.now(timezone.utc).isoformat()
                 }
                 supabase.table("trade_executions").update(t_closed).eq("id", trade_id).execute()
+                fresh_stats = get_portfolio_performance_stats(supabase)
 
                 if status == "CLOSED_SL" and pnl_r < 0:
                     run_trade_autopsy(supabase, deepseek_client, cfg, t_closed)
                 else:
-                    notify_trade_closed(cfg, t_closed)
+                    notify_trade_closed(cfg, t_closed, stats=fresh_stats)
                 continue
 
             # Regular MFE/MAE update
@@ -2137,11 +2146,17 @@ def scan_and_execute_signals(
     ]
     quarantined_symbols = cfg.get("quarantined_symbols", [])
     equity = float(account_info.get("equity", 0.0) or 0.0)
+    virtual_equity = float(cfg.get("simulated_equity", 1000.0) or 1000.0)
+    MIN_LIVE_EQUITY = 10.0
+    has_live_balance = (equity >= MIN_LIVE_EQUITY) and not cfg.get("sandbox_mode", True)
+    is_zero_balance_mode = not has_live_balance and not cfg.get("sandbox_mode", True)
+    nominal_equity = equity if has_live_balance else virtual_equity
 
-    # Detect if bot is running in Zero-Balance Analytical Mode
-    is_zero_balance_mode = (equity <= 0) and not cfg.get("sandbox_mode", True)
+    # Detect if bot is running in Zero-Balance Paper Mode or Live Margin Mode
     if is_zero_balance_mode and _SCAN_HEARTBEAT_COUNT % 4 == 1:
-        print(f"[scanner] Zero-Balance Analytical Mode: Scanning 15m candles & running DeepSeek QRO audits across {exchange_mode.upper()} targets. Candidate setups are paper-tracked without live margin orders.")
+        print(f"[scanner] ⚡ Zero-Balance Paper Mode Active: Real exchange balance is ${equity:.2f} (< ${MIN_LIVE_EQUITY:.2f}). Acting like you have balance with ${virtual_equity:,.2f} virtual capital. Signals & Banker's Exits are simulated in real time with live win rate tracking.")
+    elif has_live_balance and _SCAN_HEARTBEAT_COUNT % 4 == 1:
+        print(f"[scanner] 🟢 Live Margin Mode Active: Real balance ${equity:.2f} detected on {exchange_mode.upper()}. Orders will execute natively on exchange.")
 
     # P10 FIX: Filter eligible targets and prefetch OHLCV in parallel across symbols
     eligible_targets: List[Tuple[str, str, Any, str, bool]] = []
@@ -2578,7 +2593,7 @@ def scan_and_execute_signals(
                     effective_risk_pct = effective_risk_pct * 0.5
                     print(f"[risk] Equity Drawdown Reducer Active: Drawdown is {drawdown_from_peak:.1f}% from peak. Position risk halved to {effective_risk_pct*100:.2f}%.")
 
-                nominal_equity = equity if equity > 0 else 10000.0
+                nominal_equity = equity if has_live_balance else virtual_equity
                 entry_price = float(setup["entry"])
                 sl_price = float(setup["sl"])
                 tp_price = float(setup["tp"])
@@ -2610,11 +2625,11 @@ def scan_and_execute_signals(
                 tp_order_id = "mock_tp_1"
 
                 if is_simulated:
-                    mode_label = f"ANALYTICAL SIGNAL ({exchange_name.upper()} Paper Tracking)" if is_zero_balance_mode else "SANDBOX DEMO"
+                    mode_label = f"ZERO-BALANCE SIMULATED ({exchange_name.upper()} Paper Tracking with ${virtual_equity:,.2f} Capital)" if is_zero_balance_mode else "SANDBOX DEMO"
                     print(f"[execution] {mode_label} recorded for {symbol} {side} ({exchange_name.upper()}): Entry ${format_price_dynamic(entry_price)}, SL ${format_price_dynamic(sl_price)}, TP ${format_price_dynamic(tp_price)} (+{setup.get('rr', 2.0)}R), Score {total_score}/100")
-                    exchange_order_id = f"ANALYTICS_{int(time.time())}"
-                    sl_order_id = f"ANALYTICS_SL_{int(time.time())}"
-                    tp_order_id = f"ANALYTICS_TP_{int(time.time())}"
+                    exchange_order_id = f"ZERO_BAL_SIM_{int(time.time())}"
+                    sl_order_id = f"ZERO_BAL_SL_{int(time.time())}"
+                    tp_order_id = f"ZERO_BAL_TP_{int(time.time())}"
                 else:
                     print(f"[execution] Live {exchange_name.upper()} Order Dispatch for {side} on {symbol}: Qty {position_qty}, Score {total_score}/100")
                     try:
@@ -2663,10 +2678,18 @@ def scan_and_execute_signals(
                         tp_order_id = str(tp_order.get("id"))
 
                     except Exception as order_exc:
+                        err_str = str(order_exc).lower()
                         print(f"[execution] {exchange_name} order submission fallback: {order_exc}")
-                        exchange_order_id = f"sim_{int(time.time())}"
-                        sl_order_id = f"sim_sl_{int(time.time())}"
-                        tp_order_id = f"sim_tp_{int(time.time())}"
+                        is_simulated = True
+                        if any(k in err_str for k in ["insufficient", "balance", "margin", "min_notional", "filter"]):
+                            print(f"[execution] ⚡ Live margin insufficient on {exchange_name}. Gracefully executing as Zero-Balance Paper Trade with ${virtual_equity:,.2f} virtual capital.")
+                            exchange_order_id = f"ZERO_BAL_FALLBACK_{int(time.time())}"
+                            sl_order_id = f"ZERO_BAL_SL_{int(time.time())}"
+                            tp_order_id = f"ZERO_BAL_TP_{int(time.time())}"
+                        else:
+                            exchange_order_id = f"sim_{int(time.time())}"
+                            sl_order_id = f"sim_sl_{int(time.time())}"
+                            tp_order_id = f"sim_tp_{int(time.time())}"
 
                 # Insert into trade_executions
                 new_trade_record = {
@@ -2704,8 +2727,20 @@ def scan_and_execute_signals(
                 res = supabase.table("trade_executions").insert(new_trade_record).execute()
                 inserted_trade = res.data[0] if res.data else new_trade_record
 
-                # Dispatch Telegram Notification
-                notify_trade_opened(cfg, inserted_trade, {"total_score": total_score})
+                # Dispatch Telegram Notification with live Win Rate & Mode Scorecard
+                current_stats = get_portfolio_performance_stats(supabase)
+                mode_info = {
+                    "is_zero_balance": is_zero_balance_mode or is_simulated,
+                    "virtual_equity": virtual_equity,
+                    "real_equity": equity
+                }
+                notify_trade_opened(
+                    cfg, 
+                    inserted_trade, 
+                    {"total_score": total_score, "model_used": model_used},
+                    stats=current_stats,
+                    mode_info=mode_info
+                )
 
         except Exception as sym_err:
             print(f"[scanner] Error processing {symbol} on {exchange_name}: {sym_err}")

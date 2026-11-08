@@ -67,8 +67,81 @@ def send_telegram_alert(
         return False
 
 
-def notify_trade_opened(cfg: Dict[str, Any], trade: Dict[str, Any], score_info: Dict[str, Any]) -> None:
-    """Dispatches Trade Opened notification with full quantitative context."""
+def get_portfolio_performance_stats(supabase_client: Any) -> Dict[str, Any]:
+    """
+    Computes overall win rate and performance metrics from trade_executions.
+    """
+    if not supabase_client:
+        return {
+            "total_closed": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakevens": 0,
+            "win_rate_pct": 0.0,
+            "total_pnl_usdt": 0.0,
+            "total_pnl_r": 0.0,
+            "profit_factor": 0.0
+        }
+    try:
+        res = supabase_client.table("trade_executions").select("status, pnl_usdt, pnl_r").in_(
+            "status", ["CLOSED_TP", "CLOSED_SL", "TIME_STOP", "MANUAL_CLOSE"]
+        ).execute()
+        trades = res.data or []
+        total_closed = len(trades)
+        if total_closed == 0:
+            return {
+                "total_closed": 0,
+                "wins": 0,
+                "losses": 0,
+                "breakevens": 0,
+                "win_rate_pct": 0.0,
+                "total_pnl_usdt": 0.0,
+                "total_pnl_r": 0.0,
+                "profit_factor": 0.0
+            }
+
+        wins = sum(1 for t in trades if float(t.get("pnl_usdt") or 0.0) > 0)
+        losses = sum(1 for t in trades if float(t.get("pnl_usdt") or 0.0) < 0)
+        breakevens = sum(1 for t in trades if float(t.get("pnl_usdt") or 0.0) == 0)
+        win_rate_pct = round((wins / total_closed) * 100.0, 1)
+        total_pnl_usdt = round(sum(float(t.get("pnl_usdt") or 0.0) for t in trades), 2)
+        total_pnl_r = round(sum(float(t.get("pnl_r") or 0.0) for t in trades), 2)
+        gross_wins = sum(float(t.get("pnl_usdt") or 0.0) for t in trades if float(t.get("pnl_usdt") or 0.0) > 0)
+        gross_losses = abs(sum(float(t.get("pnl_usdt") or 0.0) for t in trades if float(t.get("pnl_usdt") or 0.0) < 0))
+        pf = round(gross_wins / gross_losses, 2) if gross_losses > 0 else (99.0 if gross_wins > 0 else 0.0)
+
+        return {
+            "total_closed": total_closed,
+            "wins": wins,
+            "losses": losses,
+            "breakevens": breakevens,
+            "win_rate_pct": win_rate_pct,
+            "total_pnl_usdt": total_pnl_usdt,
+            "total_pnl_r": total_pnl_r,
+            "profit_factor": pf
+        }
+    except Exception as e:
+        print(f"[notifier] Error computing portfolio stats: {e}")
+        return {
+            "total_closed": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakevens": 0,
+            "win_rate_pct": 0.0,
+            "total_pnl_usdt": 0.0,
+            "total_pnl_r": 0.0,
+            "profit_factor": 0.0
+        }
+
+
+def notify_trade_opened(
+    cfg: Dict[str, Any], 
+    trade: Dict[str, Any], 
+    score_info: Dict[str, Any],
+    stats: Optional[Dict[str, Any]] = None,
+    mode_info: Optional[Dict[str, Any]] = None
+) -> None:
+    """Dispatches Trade Opened notification with full quantitative context and win rate."""
     symbol = trade.get("symbol")
     side = trade.get("side")
     entry = trade.get("entry_price")
@@ -77,6 +150,22 @@ def notify_trade_opened(cfg: Dict[str, Any], trade: Dict[str, Any], score_info: 
     qty = trade.get("qty")
     strat = trade.get("strategy_name")
     score = score_info.get("total_score", "N/A")
+    model_name = score_info.get("model_used", "AI Auditor")
+
+    # Win rate line
+    wr_text = f"<b>{stats['win_rate_pct']:.1f}%</b> ({stats['wins']}W / {stats['losses']}L / {stats['breakevens']}BE)" if stats and stats.get("total_closed", 0) > 0 else "<b>Awaiting first closed trade</b>"
+
+    # Execution Mode line
+    is_sim = trade.get("is_simulated", False) or (mode_info and mode_info.get("is_zero_balance"))
+    if is_sim:
+        virt_equity = float(mode_info.get("virtual_equity", 1000.0) if mode_info else 1000.0)
+        mode_line = (
+            f"⚡ <b>Mode:</b> <code>Zero-Balance Simulated</code> (Virtual Capital: ${virt_equity:,.2f})\n"
+            f"<i>(Acting like you have balance. Depositing funds to Binance/Bybit auto-triggers live trades.)</i>"
+        )
+    else:
+        real_eq = float(mode_info.get("real_equity", 0.0) if mode_info else 0.0)
+        mode_line = f"🟢 <b>Mode:</b> <code>Live Margin Execution</code> (Real Balance: ${real_eq:,.2f})"
 
     msg = (
         f"<b>Action:</b> NEW {side} EXECUTION\n"
@@ -86,17 +175,24 @@ def notify_trade_opened(cfg: Dict[str, Any], trade: Dict[str, Any], score_info: 
         f"<b>Stop Loss:</b> <code>{sl:.4f}</code>\n"
         f"<b>Take Profit:</b> <code>{tp:.4f}</code>\n"
         f"<b>Position Qty:</b> <code>{qty}</code>\n"
-        f"<b>DeepSeek Audit Score:</b> <b>{score}/100</b>\n"
-        f"<b>Native Orders:</b> Server-side STOP_MARKET & TAKE_PROFIT active on Binance."
+        f"<b>Audit / Engine:</b> <b>{score}/100</b> (<i>{model_name}</i>)\n"
+        f"{mode_line}\n\n"
+        f"📊 <b>Portfolio Win Rate:</b> {wr_text}"
     )
     send_telegram_alert(cfg, f"POSITION OPENED: {symbol} ({side})", msg, level="TRADE_OPEN")
 
 
-def notify_breakeven_partial(cfg: Dict[str, Any], trade: Dict[str, Any], current_price: float) -> None:
+def notify_breakeven_partial(
+    cfg: Dict[str, Any], 
+    trade: Dict[str, Any], 
+    current_price: float,
+    stats: Optional[Dict[str, Any]] = None
+) -> None:
     """Dispatches notification when +1.0R is reached, 50% TP closed, and SL moved to BE."""
     symbol = trade.get("symbol")
     side = trade.get("side")
     entry = trade.get("entry_price")
+    wr_info = f"\n📊 <b>Portfolio Win Rate:</b> <b>{stats['win_rate_pct']:.1f}%</b> ({stats['wins']}W / {stats['losses']}L)" if stats and stats.get("total_closed", 0) > 0 else ""
 
     msg = (
         f"<b>Asset:</b> <code>{symbol}</code> ({side})\n"
@@ -104,7 +200,7 @@ def notify_breakeven_partial(cfg: Dict[str, Any], trade: Dict[str, Any], current
         f"<b>Action Executed:</b>\n"
         f"  • <b>50% Partial Profit:</b> Market order closed\n"
         f"  • <b>Remaining 50%:</b> Stop Loss shifted to <code>{entry:.4f}</code> (Break-Even + Fee Buffer)\n"
-        f"<b>Status:</b> <b>RISK-FREE TRADE LOCKED</b>"
+        f"<b>Status:</b> <b>RISK-FREE TRADE LOCKED</b>{wr_info}"
     )
     send_telegram_alert(cfg, f"BREAK-EVEN & PARTIAL PROFIT LOCKED: {symbol}", msg, level="BREAKEVEN")
 
@@ -114,23 +210,30 @@ def notify_scaled_exit(
     trade: Dict[str, Any],
     step_name: str,
     current_price: float,
-    notes: str
+    notes: str,
+    stats: Optional[Dict[str, Any]] = None
 ) -> None:
     """Dispatches notification when an institutional Banker's Scaled Target or Trailing Stop triggers."""
     symbol = trade.get("symbol")
     side = trade.get("side")
+    wr_info = f"\n📊 <b>Portfolio Win Rate:</b> <b>{stats['win_rate_pct']:.1f}%</b> ({stats['wins']}W / {stats['losses']}L)" if stats and stats.get("total_closed", 0) > 0 else ""
     msg = (
         f"<b>Asset:</b> <code>{symbol}</code> ({side})\n"
         f"<b>Milestone:</b> <b>{step_name}</b>\n"
         f"<b>Current Price:</b> <code>{current_price}</code>\n"
         f"<b>Execution Detail:</b> {notes}\n"
-        f"<b>Status:</b> <b>INSTITUTIONAL PROFIT SECURED</b>"
+        f"<b>Status:</b> <b>INSTITUTIONAL PROFIT SECURED</b>{wr_info}"
     )
     send_telegram_alert(cfg, f"BANKER'S SCALE EXIT: {symbol} ({step_name})", msg, level="BREAKEVEN")
 
 
-def notify_trade_closed(cfg: Dict[str, Any], trade: Dict[str, Any], autopsy: Optional[Dict[str, Any]] = None) -> None:
-    """Dispatches trade closure notification, appending forensic autopsy if loss."""
+def notify_trade_closed(
+    cfg: Dict[str, Any], 
+    trade: Dict[str, Any], 
+    autopsy: Optional[Dict[str, Any]] = None,
+    stats: Optional[Dict[str, Any]] = None
+) -> None:
+    """Dispatches trade closure notification with forensic autopsy and live winning rate."""
     symbol = trade.get("symbol")
     status = trade.get("status")
     pnl_usdt = trade.get("pnl_usdt", 0.0)
@@ -142,12 +245,25 @@ def notify_trade_closed(cfg: Dict[str, Any], trade: Dict[str, Any], autopsy: Opt
     level = "CLOSE_WIN" if is_win else "CLOSE_LOSS"
     verdict = "WIN" if is_win else "LOSS"
 
+    is_sim = trade.get("is_simulated", False) or str(trade.get("exchange_order_id", "")).startswith("ZERO_BAL_") or str(trade.get("exchange_order_id", "")).startswith("ANALYTICS_") or str(trade.get("exchange_order_id", "")).startswith("sim_")
+    exec_mode_badge = "⚡ Zero-Balance Simulated Mode" if is_sim else "🟢 Live Exchange Margin"
+
+    wr_card = ""
+    if stats and stats.get("total_closed", 0) > 0:
+        wr_card = (
+            f"\n\n🏆 <b>PORTFOLIO WINNING RATE:</b> <b>{stats['win_rate_pct']:.1f}%</b> ({stats['wins']}W / {stats['losses']}L / {stats['breakevens']}BE)\n"
+            f"💰 <b>Cumulative Net PnL:</b> <code>{stats['total_pnl_usdt']:+.2f} USDT</code> (<code>{stats['total_pnl_r']:+.2f}R</code>)\n"
+            f"📈 <b>Profit Factor:</b> <code>{stats['profit_factor']:.2f}</code> | <b>Closed Trades:</b> <code>{stats['total_closed']}</code>\n"
+            f"💼 <b>Execution Category:</b> <code>{exec_mode_badge}</code>"
+        )
+
     msg = (
         f"<b>Symbol:</b> <code>{symbol}</code>\n"
         f"<b>Result:</b> <b>{verdict} ({status})</b>\n"
-        f"<b>Net PnL:</b> <code>{pnl_usdt:+.2f} USDT</code> ({pnl_r:+.2f}R)\n"
+        f"<b>Trade PnL:</b> <code>{pnl_usdt:+.2f} USDT</code> ({pnl_r:+.2f}R)\n"
         f"<b>MFE (Max Favorable):</b> <code>{mfe:.2f}R</code>\n"
-        f"<b>MAE (Max Adverse):</b> <code>{mae:.2f}R</code>\n"
+        f"<b>MAE (Max Adverse):</b> <code>{mae:.2f}R</code>"
+        f"{wr_card}"
     )
 
     if autopsy:

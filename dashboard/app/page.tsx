@@ -94,6 +94,7 @@ interface BotConfig {
   active_strategies: string[];
   timeframe: string;
   risk_pct: number;
+  simulated_equity?: number;
   target_rr?: number;
   min_score: number;
   min_rvol: number;
@@ -1043,6 +1044,7 @@ export default function CommandCenterPage() {
       const updates = {
         risk_pct: Number(formSettings.risk_pct),
         target_rr: Number(formSettings.target_rr ?? 2.5),
+        simulated_equity: Number(formSettings.simulated_equity ?? 1000),
         min_score: Number(formSettings.min_score),
         min_rvol: Number(formSettings.min_rvol),
         max_directional_exposure_pct: Number(formSettings.max_directional_exposure_pct),
@@ -1946,6 +1948,32 @@ export default function CommandCenterPage() {
               <span className="sm:hidden">{config?.sandbox_mode ? "DEMO" : "LIVE"}</span>
             </button>
 
+            {/* Dynamic Balance State: Live Margin vs Zero-Balance Paper Mode */}
+            <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
+              Number(latestSnapshot?.equity_usdt ?? 0) >= 10
+                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                : "bg-amber-50 border-amber-300 text-amber-800"
+            }`}>
+              {Number(latestSnapshot?.equity_usdt ?? 0) >= 10 ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-emerald-600 shrink-0" />
+                  <span>LIVE MARGIN (${Number(latestSnapshot?.equity_usdt ?? 0).toFixed(2)})</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-3.5 h-3.5 mr-1.5 text-amber-600 shrink-0" />
+                  <span>PAPER (${Number(config?.simulated_equity ?? 1000).toLocaleString()} VIRTUAL)</span>
+                </>
+              )}
+            </div>
+
+            {/* Live Portfolio Win Rate Indicator */}
+            <div className="hidden lg:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border border-emerald-200 bg-emerald-50/70 text-emerald-800 text-xs font-bold tabular-nums">
+              <span className="mr-1">🏆 WIN RATE:</span>
+              <span>{overallStats.winRate}%</span>
+              <span className="text-[10px] text-emerald-600 ml-1 font-medium">({overallStats.totalWins}W/{Math.max(0, overallStats.totalClosed - overallStats.totalWins)}L)</span>
+            </div>
+
             <div className="hidden lg:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md">
               <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-500" /> NORMAL
             </div>
@@ -1976,33 +2004,44 @@ export default function CommandCenterPage() {
                 <h2 className="text-xl font-semibold tracking-tight">Executive Overview &amp; Telemetry</h2>
               </div>
 
-              {/* Zero-Balance Analytical Mode Banner */}
+              {/* Zero-Balance Paper Execution Mode Banner */}
               {Number(latestSnapshot?.equity_usdt ?? 0) <= 0 && !config?.sandbox_mode && (
-                <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 border border-purple-200/80 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                <div className="bg-gradient-to-r from-amber-50 via-indigo-50/50 to-emerald-50 border border-amber-200/80 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
                   <div className="flex items-start sm:items-center space-x-3">
-                    <div className="p-2.5 bg-purple-600 text-white rounded-lg shrink-0 mt-0.5 sm:mt-0 shadow-xs">
-                      <BrainCircuit className="w-5 h-5 animate-pulse" />
+                    <div className="p-2.5 bg-amber-500 text-white rounded-lg shrink-0 mt-0.5 sm:mt-0 shadow-xs">
+                      <Zap className="w-5 h-5 animate-pulse" />
                     </div>
                     <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
-                          Analytical Mode Active
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300">
+                          ⚡ Zero-Balance Paper Mode Active
                         </span>
-                        <span className="text-xs font-bold text-purple-900">
-                          Binance Balance: $0.00
+                        <span className="text-xs font-bold text-slate-800">
+                          Simulated Capital: ${Number(config?.simulated_equity ?? 1000).toLocaleString()} Virtual
+                        </span>
+                        <span className="text-xs font-semibold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200">
+                          Win Rate: {overallStats.winRate}% ({overallStats.totalWins}W / {Math.max(0, overallStats.totalClosed - overallStats.totalWins)}L)
                         </span>
                       </div>
-                      <p className="text-xs text-purple-800 mt-1 leading-relaxed">
-                        Continuous 15m candlestick scanning and DeepSeek AI Risk Audits are actively running. Candidate setups are tracked in paper mode with exact Entry, SL, and TP (+2.2R) targets so you never miss an edge while funding your account.
+                      <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                        Acting like you have balance! Scanning 15m candles and executing setups in paper mode with Banker&apos;s partial exits (+1.5R partial bank &amp; BE, +3.0R bank, +5.0R trail) and real-time win rate tracking. <strong>Once real balance (&ge; $10) is deposited to Binance or Bybit, live margin orders will execute automatically.</strong>
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setActiveSection("audits")}
-                    className="shrink-0 px-3.5 py-1.5 text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
-                  >
-                    View AI Audits &rarr;
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setActiveSection("settings")}
+                      className="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
+                    >
+                      Virtual Balance Settings
+                    </button>
+                    <button
+                      onClick={() => setActiveSection("journal")}
+                      className="px-3.5 py-1.5 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
+                    >
+                      Track Trades &rarr;
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -3987,6 +4026,58 @@ export default function CommandCenterPage() {
                     <span>1:1.5 (High Frequency Scalp)</span>
                     <span>1:2.5 (Institutional Optimal)</span>
                     <span>1:6.0+ (Outlier Trend)</span>
+                  </div>
+                </div>
+
+                {/* Zero-Balance Virtual Capital Configuration */}
+                <div className="p-4 rounded-xl border border-amber-300 bg-gradient-to-r from-amber-50/70 via-indigo-50/40 to-slate-50 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-amber-500 text-white rounded-md shrink-0">
+                        <Zap className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-black text-slate-900">Virtual Balance (Zero-Balance Paper Mode)</span>
+                        <p className="text-[11px] text-slate-600">
+                          When your Binance or Bybit exchange balance is $0.00, the bot acts like you have this balance to calculate position sizes and track your win rate in real time.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {[50, 100, 500, 1000, 5000, 10000].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => setFormSettings({ ...formSettings, simulated_equity: amt })}
+                          className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
+                            Number(formSettings.simulated_equity ?? 1000) === amt
+                              ? "bg-amber-600 text-white shadow-2xs"
+                              : "bg-white text-slate-700 hover:bg-slate-100 border border-slate-200"
+                          }`}
+                        >
+                          ${amt >= 1000 ? `${amt / 1000}k` : amt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                    <div className="relative w-48">
+                      <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">$</span>
+                      <input
+                        type="number"
+                        min="10"
+                        step="50"
+                        value={formSettings.simulated_equity ?? 1000}
+                        onChange={(e) =>
+                          setFormSettings({ ...formSettings, simulated_equity: Math.max(10, parseFloat(e.target.value) || 1000) })
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-7 pr-3 text-xs font-bold text-slate-900 font-mono focus:border-amber-500 focus:outline-hidden"
+                      />
+                    </div>
+                    <span className="text-[11px] text-slate-600 font-medium">
+                      💡 <strong>Automatic Live Switch:</strong> Once real balance (&ge; $10) is deposited to Binance or Bybit, the bot automatically trades with your live balance.
+                    </span>
                   </div>
                 </div>
 

@@ -70,6 +70,9 @@ export async function GET() {
       if (!existing.target_rr || Number(existing.target_rr) < 1.5) {
         existing.target_rr = 2.5;
       }
+      if (!existing.simulated_equity || Number(existing.simulated_equity) <= 0) {
+        existing.simulated_equity = 1000.0;
+      }
       return NextResponse.json({
         success: true,
         data: sanitizeConfig(existing),
@@ -97,6 +100,7 @@ export async function GET() {
       timeframe: "15m",
       risk_pct: 0.01,
       target_rr: 2.5,
+      simulated_equity: 1000.0,
       min_score: 75,
       min_rvol: 1.2,
       enable_breakeven_partial: true,
@@ -205,6 +209,9 @@ export async function POST(req: Request) {
 
     if (payload.target_rr !== undefined) {
       payload.target_rr = Math.max(1.5, Math.min(10.0, Number(payload.target_rr) || 2.5));
+    }
+    if (payload.simulated_equity !== undefined) {
+      payload.simulated_equity = Math.max(10.0, Math.min(1000000.0, Number(payload.simulated_equity) || 1000.0));
     }
 
     // Use UPSERT so it will insert row 1 if missing, or update if existing!
