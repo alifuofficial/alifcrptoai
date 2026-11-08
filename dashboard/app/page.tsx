@@ -119,7 +119,7 @@ interface BotConfig {
   forex_rollover_shield?: boolean;
   forex_max_spread_pips?: number;
   panic_close_target?: "ALL" | "CRYPTO" | "FOREX";
-  ai_provider?: "council_3model" | "deepseek" | "gemini" | "auto";
+  ai_provider?: "council_3model" | "deepseek" | "gemini" | "auto" | "technical";
   gemini_api_key_override?: string | null;
   gemini_model?: string;
   qwen_api_key_override?: string | null;
@@ -1893,7 +1893,9 @@ export default function CommandCenterPage() {
 
             {/* AI Provider Indicator */}
             <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
-              (config?.ai_provider || "council_3model") === "council_3model"
+              config?.ai_provider === "technical"
+                ? "bg-amber-50 border-amber-300 text-amber-800 shadow-2xs"
+                : (config?.ai_provider || "council_3model") === "council_3model"
                 ? "bg-purple-50 border-purple-200 text-purple-700"
                 : config?.ai_provider === "gemini"
                 ? "bg-blue-50 border-blue-200 text-blue-700"
@@ -1903,7 +1905,9 @@ export default function CommandCenterPage() {
             }`}>
               <Cpu className="w-3.5 h-3.5 mr-1.5 shrink-0" />
               <span>{
-                (config?.ai_provider || "council_3model") === "council_3model"
+                config?.ai_provider === "technical"
+                  ? "⚡ RAW TECHNICAL"
+                  : (config?.ai_provider || "council_3model") === "council_3model"
                   ? "🏛️ 3-MODEL COUNCIL"
                   : config?.ai_provider === "gemini"
                   ? "GEMINI (FREE)"
@@ -4407,79 +4411,173 @@ export default function CommandCenterPage() {
                 </div>
               </div>
 
-              {/* Dynamic AI Risk Officer & Multi-Model Routing Engine */}
+              {/* Dynamic Trade Execution Engine & AI Risk Architecture */}
               <div className="bg-surface border border-border rounded-lg p-6 space-y-6">
                 <div>
                   <h3 className="text-xs font-bold text-brand-600 uppercase tracking-wider flex items-center gap-2">
                     <Cpu className="h-4 w-4" />
-                    <span>AI Risk Officer Model &amp; Routing Engine</span>
+                    <span>Trade Execution Engine &amp; AI Risk Architecture</span>
                   </h3>
                   <p className="text-xs text-textMuted mt-1">
-                    Select your AI Audit architecture: the flagship 3-Model AI Council (Gemini + Qwen + DeepSeek), single-model DeepSeek / Gemini, or Auto-Fallback mode.
+                    Select your execution model: trade directly on pure Raw Technical Strategies with 0ms LLM latency, or enforce AI Risk Officer consensus gatekeeping.
                   </p>
                 </div>
 
-                {/* AI Provider Selector */}
+                {/* Master Trade Execution Architecture Mode Toggle */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-textMain">
-                    Active AI Model Provider
+                    Trade Execution Architecture Mode
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                      {
-                        id: "council_3model",
-                        title: "🏛️ 3-Model AI Council",
-                        desc: "Pluggable Council: Chartist (OpenAI/Gemini /40) + Quant (Grok/Qwen /30) + DeepSeek (Risk /30)",
-                        badge: "Flagship Consensus",
-                        color: "border-purple-500 bg-purple-50/50 text-purple-900"
-                      },
-                      {
-                        id: "deepseek",
-                        title: "DeepSeek V3 / R1",
-                        desc: "Standard institutional reasoning via api.deepseek.com",
-                        badge: "Direct API",
-                        color: "border-indigo-500 bg-indigo-50/50 text-indigo-900"
-                      },
-                      {
-                        id: "gemini",
-                        title: "Google Gemini",
-                        desc: "Ultra-fast auditing with 1,500 daily requests free on Google AI Studio",
-                        badge: "Free Tier",
-                        color: "border-blue-500 bg-blue-50/50 text-blue-900"
-                      },
-                      {
-                        id: "auto",
-                        title: "Auto-Fallback (Hybrid)",
-                        desc: "DeepSeek primary -> Automatic instant Gemini backup on 402 or balance outage",
-                        badge: "Shield",
-                        color: "border-emerald-500 bg-emerald-50/50 text-emerald-900"
-                      }
-                    ].map((opt) => {
-                      const isSel = (formSettings.ai_provider || "council_3model") === opt.id;
-                      return (
-                        <div
-                          key={opt.id}
-                          onClick={() => setFormSettings({ ...formSettings, ai_provider: opt.id as any })}
-                          className={`p-3.5 rounded-lg border-2 cursor-pointer transition-all ${
-                            isSel
-                              ? opt.color + " shadow-xs"
-                              : "border-border bg-slate-50/50 hover:bg-slate-100/60 text-textMain"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-xs font-bold">{opt.title}</span>
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                              isSel ? "bg-white/90 text-textMain border border-border/50" : "bg-slate-200/80 text-textMuted"
-                            }`}>
-                              {opt.badge}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-textMuted leading-tight">{opt.desc}</p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {/* Mode 1: Raw Technical Strategy Mode */}
+                    <div
+                      onClick={() => setFormSettings({ ...formSettings, ai_provider: "technical" })}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        formSettings.ai_provider === "technical"
+                          ? "border-amber-500 bg-amber-50/50 text-amber-950 shadow-xs ring-2 ring-amber-400/20"
+                          : "border-border bg-slate-50/50 hover:bg-slate-100/60 text-textMain"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Zap className={`w-4 h-4 ${formSettings.ai_provider === "technical" ? "text-amber-600" : "text-slate-400"}`} />
+                          <span className="text-xs font-black">⚡ Raw Technical Strategy Mode</span>
                         </div>
-                      );
-                    })}
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                          formSettings.ai_provider === "technical"
+                            ? "bg-amber-600 text-white"
+                            : "bg-slate-200 text-slate-600"
+                        }`}>
+                          High Velocity / Zero AI
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-textMuted leading-relaxed">
+                        Trades execute directly off mathematical institutional setups (SMC Sweeps, Order Block FVG, Asian Judas Breakers). <strong>0ms LLM latency, $0 token costs, zero external API dependencies</strong>, and maximum signal compounding velocity.
+                      </p>
+                      {formSettings.ai_provider === "technical" && (
+                        <div className="mt-2.5 pt-2 border-t border-amber-200/60 flex items-center gap-1.5 text-[10px] font-bold text-amber-800">
+                          <CheckCircle2 className="w-3 h-3 text-amber-600" />
+                          <span>Active: All AI gatekeepers bypassed. Trades take direct signal entries.</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Mode 2: AI-Audited Mode */}
+                    <div
+                      onClick={() => {
+                        if (formSettings.ai_provider === "technical") {
+                          setFormSettings({ ...formSettings, ai_provider: "council_3model" });
+                        }
+                      }}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        formSettings.ai_provider !== "technical"
+                          ? "border-purple-500 bg-purple-50/40 text-purple-950 shadow-xs ring-2 ring-purple-400/20"
+                          : "border-border bg-slate-50/50 hover:bg-slate-100/60 text-textMain"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Cpu className={`w-4 h-4 ${formSettings.ai_provider !== "technical" ? "text-purple-600" : "text-slate-400"}`} />
+                          <span className="text-xs font-black">🤖 AI-Audited Mode (Risk Officer)</span>
+                        </div>
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                          formSettings.ai_provider !== "technical"
+                            ? "bg-purple-600 text-white"
+                            : "bg-slate-200 text-slate-600"
+                        }`}>
+                          Conservative Gatekeeper
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-textMuted leading-relaxed">
+                        Candidate setups are submitted to the chosen AI Risk Officer or Consensus Council. Enforces 100-pt discrete rubric scoring, macroeconomic news blackout checks, and HTF alignment before entry.
+                      </p>
+                      {formSettings.ai_provider !== "technical" && (
+                        <div className="mt-2.5 pt-2 border-t border-purple-200/60 flex items-center gap-1.5 text-[10px] font-bold text-purple-800">
+                          <CheckCircle2 className="w-3 h-3 text-purple-600" />
+                          <span>Active: Trades audited by {formSettings.ai_provider === "deepseek" ? "DeepSeek Solo" : formSettings.ai_provider === "gemini" ? "Google Gemini" : formSettings.ai_provider === "auto" ? "Hybrid Fallback" : "3-Model Council"}.</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
+
+                {formSettings.ai_provider === "technical" ? (
+                  <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/60 space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                      <Zap className="w-4 h-4 text-amber-600" />
+                      <span>Raw Technical Strategy Mode is Active</span>
+                    </div>
+                    <p className="text-xs text-amber-800/90 leading-relaxed">
+                      The live bot will execute all high-probability technical setups immediately upon signal detection. AI API keys, payment balances, and external rate limits will not block or delay any trades. Banker&apos;s scale-outs (+1.5R partial bank &amp; BE, +3.0R bank, +5.0R full close) remain fully active.
+                    </p>
+                    <div className="text-[11px] text-amber-700 font-medium">
+                      💡 To re-enable AI LLM auditing, simply click <strong>&quot;AI-Audited Mode&quot;</strong> above.
+                    </div>
+                  </div>
+                ) : (
+                  /* AI Provider Selector */
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-textMain">
+                      Active AI Model Provider
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {[
+                        {
+                          id: "council_3model",
+                          title: "🏛️ 3-Model AI Council",
+                          desc: "Pluggable Council: Chartist (OpenAI/Gemini /40) + Quant (Grok/Qwen /30) + DeepSeek (Risk /30)",
+                          badge: "Flagship Consensus",
+                          color: "border-purple-500 bg-purple-50/50 text-purple-900"
+                        },
+                        {
+                          id: "deepseek",
+                          title: "DeepSeek V3 / R1",
+                          desc: "Standard institutional reasoning via api.deepseek.com",
+                          badge: "Direct API",
+                          color: "border-indigo-500 bg-indigo-50/50 text-indigo-900"
+                        },
+                        {
+                          id: "gemini",
+                          title: "Google Gemini",
+                          desc: "Ultra-fast auditing with 1,500 daily requests free on Google AI Studio",
+                          badge: "Free Tier",
+                          color: "border-blue-500 bg-blue-50/50 text-blue-900"
+                        },
+                        {
+                          id: "auto",
+                          title: "Auto-Fallback (Hybrid)",
+                          desc: "DeepSeek primary -> Automatic instant Gemini backup on 402 or balance outage",
+                          badge: "Shield",
+                          color: "border-emerald-500 bg-emerald-50/50 text-emerald-900"
+                        }
+                      ].map((opt) => {
+                        const isSel = (formSettings.ai_provider || "council_3model") === opt.id;
+                        return (
+                          <div
+                            key={opt.id}
+                            onClick={() => setFormSettings({ ...formSettings, ai_provider: opt.id as any })}
+                            className={`p-3.5 rounded-lg border-2 cursor-pointer transition-all ${
+                              isSel
+                                ? opt.color + " shadow-xs"
+                                : "border-border bg-slate-50/50 hover:bg-slate-100/60 text-textMain"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-xs font-bold">{opt.title}</span>
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                isSel ? "bg-white/90 text-textMain border border-border/50" : "bg-slate-200/80 text-textMuted"
+                              }`}>
+                                {opt.badge}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-textMuted leading-tight">{opt.desc}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Pluggable Council Role Engine Selector */}
                 {(formSettings.ai_provider || "council_3model") === "council_3model" && (

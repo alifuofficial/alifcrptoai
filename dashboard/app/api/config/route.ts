@@ -61,7 +61,7 @@ export async function GET() {
       if (!existing.qwen_model) {
         existing.qwen_model = "qwen3.7-flash";
       }
-      if (!existing.ai_provider || existing.ai_provider === "deepseek" || existing.ai_provider === "auto") {
+      if (!existing.ai_provider) {
         existing.ai_provider = "council_3model";
       }
       if (!existing.forex_max_spread_pips || Number(existing.forex_max_spread_pips) <= 1.5) {

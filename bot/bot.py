@@ -1532,13 +1532,25 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
         pass
 
     try:
-        content, model_used = execute_ai_completion(
-            cfg,
-            system_prompt=AUTOPSY_PROMPT,
-            user_prompt=f"Analyze this closed loss trade:\n{json.dumps(payload, indent=2)}",
-            max_tokens=600
-        )
-        autopsy_data = parse_ai_json(content)
+        active_prov = str(cfg.get("ai_provider", "council_3model")).strip().lower()
+        has_ai_key = bool(cfg.get("deepseek_key_override") or cfg.get("gemini_api_key_override") or cfg.get("openai_api_key_override") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("GEMINI_API_KEY"))
+
+        if active_prov in ["technical", "raw_technical", "no_ai"] and not has_ai_key:
+            autopsy_data = {
+                "failure_category": "technical_stop_hit",
+                "root_cause_explanation": f"Normal mathematical stop-loss hit on {trade.get('strategy_name', 'Strategy')}. Trade closed at predefined risk parameters.",
+                "preventative_lesson": f"Maintain standard discipline and Banker's scaling on {trade.get('strategy_name', 'Strategy')}.",
+                "session_context": "Raw Technical Strategy Mode"
+            }
+            model_used = "Raw Technical Strategy (No AI)"
+        else:
+            content, model_used = execute_ai_completion(
+                cfg,
+                system_prompt=AUTOPSY_PROMPT,
+                user_prompt=f"Analyze this closed loss trade:\n{json.dumps(payload, indent=2)}",
+                max_tokens=600
+            )
+            autopsy_data = parse_ai_json(content)
 
         # 1. Insert into trade_autopsies (P12 FIX: includes session tag and hour in root cause)
         supabase.table("trade_autopsies").insert({
@@ -2422,7 +2434,26 @@ def scan_and_execute_signals(
                 deepseek_rep = {}
                 council_scores = {}
 
-                if active_prov in ["council_3model", "council"]:
+                # ⚡ Mode Branch: Raw Technical Strategy Mode (Zero AI Gatekeeping) vs. AI-Audited Mode
+                if active_prov in ["technical", "raw_technical", "no_ai"]:
+                    print(f"[scanner] ⚡ Raw Technical Strategy Mode Active for {symbol} {side} ({strat_name}, {exchange_name.upper()}) — Bypassing AI LLM gatekeeping.")
+                    total_score = 100
+                    veto_triggered = False
+                    veto_reason = None
+                    model_used = "Raw Technical Strategy (No AI)"
+                    rubric = {
+                        "mode": "raw_technical",
+                        "strategy": strat_name,
+                        "entry": setup["entry"],
+                        "sl": setup["sl"],
+                        "tp": setup["tp"],
+                        "reason": "Direct technical strategy trigger (AI gatekeeper bypassed per Admin Settings)"
+                    }
+                    gemini_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
+                    qwen_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
+                    deepseek_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
+                    council_scores = None
+                elif active_prov in ["council_3model", "council"]:
                     candidate_setup_dict = {
                         "symbol": symbol,
                         "side": side,
