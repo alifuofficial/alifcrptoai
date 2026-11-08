@@ -33,7 +33,10 @@ import {
   Clock,
   Sparkles,
   Zap,
-  Info
+  Info,
+  ChevronDown,
+  ChevronUp,
+  X
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -100,6 +103,10 @@ export default function BacktestView() {
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [pastRuns, setPastRuns] = useState<BacktestReport[]>([]);
   const [loadingPastRuns, setLoadingPastRuns] = useState<boolean>(false);
+
+  // Interactive Monthly Heatmap & Daily Drill-Down States
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   // Grouped Multi-Asset Presets (Indices, Forex, Commodities, Crypto)
   const ASSET_GROUPS = [
@@ -212,6 +219,8 @@ export default function BacktestView() {
   const runBacktest = async () => {
     setIsRunning(true);
     setErrorMsg(null);
+    setSelectedMonth(null);
+    setSelectedDay(null);
 
     const effectiveDays = parseInt(customDays, 10) || lookbackDays || 365;
     const effectiveCapital = parseFloat(customCapital) || initialCapital || 100.0;
@@ -822,40 +831,280 @@ export default function BacktestView() {
         </div>
       )}
 
-      {/* 6. Monthly Performance Heatmap Grid */}
+      {/* 6. Dynamic Monthly Returns Heatmap & Interactive Daily Drill-Down */}
       {report && report.monthly_performance && Object.keys(report.monthly_performance).length > 0 && (
         <div className="bg-white p-5 rounded-xl border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-indigo-600" />
-              Monthly Returns Heatmap ({Object.keys(report.monthly_performance).length} Months)
-            </h3>
-            <span className="text-xs text-slate-400">Trailing Month-by-Month Matrix</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3.5">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-indigo-600" />
+                Monthly Returns Heatmap ({Object.keys(report.monthly_performance).length} Months / {report.lookback_days} Days)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Click any month card below to open the interactive daily trade breakdown and view individual trade logs.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] px-2.5 py-1 bg-indigo-50 text-indigo-700 font-semibold rounded-full border border-indigo-200 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-indigo-600" />
+                Click card to inspect days
+              </span>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+          {/* Month Cards Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
             {Object.entries(report.monthly_performance).map(([ym, m]: [string, any]) => {
               const isProfit = (m.net_pnl_usdt || 0) >= 0;
+              const isSelected = selectedMonth === ym;
               return (
-                <div
+                <button
                   key={ym}
-                  className={`p-3 rounded-lg border text-center transition-all ${
-                    isProfit
-                      ? "bg-emerald-50/60 border-emerald-200/70"
-                      : "bg-rose-50/60 border-rose-200/70"
+                  type="button"
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedMonth(null);
+                      setSelectedDay(null);
+                    } else {
+                      setSelectedMonth(ym);
+                      const days = m.days || [];
+                      setSelectedDay(days.length > 0 ? days[0].date : null);
+                    }
+                  }}
+                  className={`p-3 rounded-xl border text-center transition-all cursor-pointer relative group text-left ${
+                    isSelected
+                      ? "ring-2 ring-indigo-600 shadow-md bg-indigo-50/90 border-indigo-400 -translate-y-0.5"
+                      : isProfit
+                      ? "bg-emerald-50/50 hover:bg-emerald-50/90 border-emerald-200/70 hover:border-emerald-300 shadow-2xs hover:-translate-y-0.5"
+                      : "bg-rose-50/50 hover:bg-rose-50/90 border-rose-200/70 hover:border-rose-300 shadow-2xs hover:-translate-y-0.5"
                   }`}
                 >
-                  <div className="text-[11px] font-bold text-slate-600 uppercase">{ym}</div>
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 uppercase mb-0.5">
+                    <span>{ym}</span>
+                    {isSelected && (
+                      <span className="text-[9px] px-1.5 py-0.5 bg-indigo-600 text-white rounded font-bold">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
                   <div className={`text-base font-extrabold my-0.5 ${isProfit ? "text-emerald-700" : "text-rose-700"}`}>
                     {isProfit ? "+" : ""}${m.net_pnl_usdt.toFixed(1)}
                   </div>
                   <div className="text-[10px] text-slate-500 font-medium">
                     {m.trades} trades • <strong className={isProfit ? "text-emerald-700" : "text-rose-700"}>{m.win_rate_pct.toFixed(0)}% WR</strong>
                   </div>
-                </div>
+                  <div className="mt-1 text-[9px] font-semibold flex items-center justify-center gap-0.5 text-indigo-600 group-hover:text-indigo-800">
+                    {isSelected ? (
+                      <>Hide days <ChevronUp className="w-2.5 h-2.5" /></>
+                    ) : (
+                      <>View days <ChevronDown className="w-2.5 h-2.5" /></>
+                    )}
+                  </div>
+                </button>
               );
             })}
           </div>
+
+          {/* Detailed Daily Breakdown Drawer */}
+          {selectedMonth && report.monthly_performance[selectedMonth] && (() => {
+            const monthData = report.monthly_performance[selectedMonth];
+            const daysList: any[] = monthData.days || [];
+            const selectedDayData = daysList.find((d: any) => d.date === selectedDay) || daysList[0] || null;
+            const isMonthProfit = (monthData.net_pnl_usdt || 0) >= 0;
+
+            return (
+              <div className="mt-5 pt-5 border-t border-slate-200 animate-fadeIn">
+                {/* Header Banner */}
+                <div className="bg-slate-900 text-white p-4 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-xs mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center">
+                      <Calendar className="w-5 h-5 text-indigo-300" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm sm:text-base font-extrabold text-white tracking-tight">
+                          {selectedMonth} — Daily Performance Breakdown
+                        </h4>
+                        <span className="text-[10px] sm:text-[11px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 font-semibold">
+                          {daysList.length} Active Days
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        Select any trading day below to inspect its executed setups, prices, and DeepSeek scores.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                    <div className="flex items-center gap-1.5 sm:gap-2 text-xs">
+                      <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        Trades: <strong className="text-white">{monthData.trades}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        WR: <strong className="text-white">{monthData.win_rate_pct}%</strong>
+                      </span>
+                      <span className={`px-2.5 py-1 rounded border font-bold ${
+                        isMonthProfit
+                          ? "bg-emerald-950/60 text-emerald-300 border-emerald-700/50"
+                          : "bg-rose-950/60 text-rose-300 border-rose-700/50"
+                      }`}>
+                        {isMonthProfit ? "+" : ""}${monthData.net_pnl_usdt.toFixed(2)} ({monthData.total_r > 0 ? "+" : ""}{monthData.total_r}R)
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedMonth(null); setSelectedDay(null); }}
+                      className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" /> Close
+                    </button>
+                  </div>
+                </div>
+
+                {/* Days Grid */}
+                {daysList.length === 0 ? (
+                  <div className="p-5 bg-slate-50 rounded-xl text-center text-xs text-slate-500 border border-slate-200">
+                    No individual daily trade records found for {selectedMonth}. Run a fresh backtest above to view full day-by-day logs.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
+                        <span>Trading Days in {selectedMonth} ({daysList.length} days with executed trades)</span>
+                        <span className="text-[11px] text-slate-400 font-normal">Click a day card to filter table below</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
+                        {daysList.map((day: any) => {
+                          const isDayActive = (selectedDay === day.date) || (!selectedDay && selectedDayData?.date === day.date);
+                          const isDayProfit = (day.net_pnl_usdt || 0) >= 0;
+                          return (
+                            <button
+                              key={day.date}
+                              type="button"
+                              onClick={() => setSelectedDay(day.date)}
+                              className={`p-2.5 rounded-lg border text-left transition-all relative cursor-pointer ${
+                                isDayActive
+                                  ? "ring-2 ring-indigo-600 bg-indigo-50/90 border-indigo-400 shadow-xs"
+                                  : isDayProfit
+                                  ? "bg-emerald-50/40 hover:bg-emerald-50/80 border-emerald-200/70"
+                                  : "bg-rose-50/40 hover:bg-rose-50/80 border-rose-200/70"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 mb-0.5">
+                                <span>{day.date.substring(5)} <span className="text-[10px] text-slate-400 font-normal">({day.day_name})</span></span>
+                                {isDayActive && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
+                                )}
+                              </div>
+                              <div className={`text-xs font-black ${isDayProfit ? "text-emerald-700" : "text-rose-700"}`}>
+                                {isDayProfit ? "+" : ""}${day.net_pnl_usdt.toFixed(2)}
+                              </div>
+                              <div className="text-[10px] text-slate-500 flex items-center justify-between mt-0.5">
+                                <span>{day.trades_count}t ({day.wins}W/{day.losses}L)</span>
+                                <span className="font-semibold text-slate-600">{day.total_r > 0 ? "+" : ""}{day.total_r}R</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Selected Day Trade Inspector Table */}
+                    {selectedDayData && selectedDayData.trades && selectedDayData.trades.length > 0 && (
+                      <div className="bg-slate-50/70 rounded-xl border border-slate-200 overflow-hidden mt-3">
+                        <div className="p-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-indigo-600"></div>
+                            <h5 className="text-xs font-bold text-slate-900">
+                              Trades Executed on {selectedDayData.date} ({selectedDayData.day_name}) — {selectedDayData.trades.length} Setups
+                            </h5>
+                          </div>
+                          <div className="text-xs text-slate-600 flex items-center gap-3">
+                            <span>Day Result: <strong className={selectedDayData.net_pnl_usdt >= 0 ? "text-emerald-700" : "text-rose-700"}>{selectedDayData.net_pnl_usdt >= 0 ? "+" : ""}${selectedDayData.net_pnl_usdt.toFixed(2)}</strong></span>
+                            <span>•</span>
+                            <span>Day R: <strong className={selectedDayData.total_r >= 0 ? "text-emerald-700" : "text-rose-700"}>{selectedDayData.total_r >= 0 ? "+" : ""}{selectedDayData.total_r}R</strong></span>
+                            <span>•</span>
+                            <span>Win Rate: <strong>{selectedDayData.win_rate_pct}%</strong></span>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-100/80 text-slate-600 uppercase font-bold tracking-wider text-[10px] border-b border-slate-200">
+                              <tr>
+                                <th className="py-2.5 px-3">Time</th>
+                                <th className="py-2.5 px-3">Strategy</th>
+                                <th className="py-2.5 px-3">Side</th>
+                                <th className="py-2.5 px-3">Entry → Exit</th>
+                                <th className="py-2.5 px-3">Banker's Outcome</th>
+                                <th className="py-2.5 px-3">Return (R)</th>
+                                <th className="py-2.5 px-3">PnL ($)</th>
+                                <th className="py-2.5 px-3 text-right">DeepSeek Rubric</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {selectedDayData.trades.map((tr: any, idx: number) => {
+                                const isWin = tr.outcome?.includes("WIN") || (tr.final_r || 0) > 0;
+                                const isLoss = tr.outcome?.includes("LOSS") || (tr.final_r || 0) < 0;
+                                return (
+                                  <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600">
+                                      {tr.entry_time ? tr.entry_time.substring(11, 16) : "--:--"}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-semibold text-slate-800">
+                                      {tr.strategy_name}
+                                    </td>
+                                    <td className="py-2.5 px-3">
+                                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-extrabold ${
+                                        tr.side === "LONG" ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                                      }`}>
+                                        {tr.side}
+                                      </span>
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono text-slate-700 text-[11px]">
+                                      ${tr.entry} → ${tr.exit}
+                                    </td>
+                                    <td className="py-2.5 px-3">
+                                      <span className={`inline-flex items-center gap-1 font-bold text-[10px] px-2 py-0.5 rounded-full ${
+                                        isWin
+                                          ? "bg-emerald-100 text-emerald-800"
+                                          : isLoss
+                                          ? "bg-rose-100 text-rose-800"
+                                          : "bg-slate-100 text-slate-700"
+                                      }`}>
+                                        {isWin ? "✓ " : isLoss ? "✗ " : "– "}{tr.outcome}
+                                      </span>
+                                    </td>
+                                    <td className={`py-2.5 px-3 font-extrabold ${
+                                      (tr.final_r || 0) >= 0 ? "text-emerald-700" : "text-rose-700"
+                                    }`}>
+                                      {(tr.final_r || 0) >= 0 ? "+" : ""}{tr.final_r}R
+                                    </td>
+                                    <td className={`py-2.5 px-3 font-extrabold ${
+                                      (tr.pnl_usdt || 0) >= 0 ? "text-emerald-700" : "text-rose-700"
+                                    }`}>
+                                      {(tr.pnl_usdt || 0) >= 0 ? "+" : ""}${tr.pnl_usdt}
+                                    </td>
+                                    <td className="py-2.5 px-3 text-right">
+                                      <span className="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                                        {tr.deepseek_score}/100
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -958,7 +1207,11 @@ export default function BacktestView() {
             {pastRuns.slice(0, 6).map((run, idx) => (
               <div
                 key={idx}
-                onClick={() => setReport(run)}
+                onClick={() => {
+                  setReport(run);
+                  setSelectedMonth(null);
+                  setSelectedDay(null);
+                }}
                 className={`p-3 rounded-lg border cursor-pointer transition-all ${
                   report?.id === run.id
                     ? "border-brand-500 bg-brand-50/40 shadow-2xs"

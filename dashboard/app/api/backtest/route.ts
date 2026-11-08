@@ -32,6 +32,7 @@ interface Trade {
   pnl_usdt?: number;
   outcome?: "WIN" | "LOSS" | "BE" | "BE_WIN";
   capital_after?: number;
+  exit_price?: number;
 }
 
 // GET /api/backtest - Returns saved historical backtest runs from Supabase
@@ -86,13 +87,13 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
       let cleanSym = symbol.replace("/", "").replace(":USDT", "").toUpperCase();
       if (cleanSym === "PEPEUSDT") cleanSym = "1000PEPEUSDT";
 
-      const targetBars = Math.min(days * 96, 35000);
+      const targetBars = Math.min(Math.max(days * 96, 2880), 70080);
       const now = Date.now();
       const startTime = now - days * 86400 * 1000;
       const batches = Math.ceil(targetBars / 1000);
       const batchPromises: Promise<any[]>[] = [];
 
-      for (let b = 0; b < Math.min(batches, 10); b++) {
+      for (let b = 0; b < Math.min(batches, 40); b++) {
         const batchStart = startTime + b * 1000 * 15 * 60 * 1000;
         if (batchStart >= now) break;
         const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=15m&startTime=${batchStart}&limit=1000`;
@@ -187,7 +188,7 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
 
 // Generates high-fidelity realistic market series with trends, mean-reversion & volatility clusters
 function generateRealisticCandles(symbol: string, days: number): Candle[] {
-  const barsCount = Math.min(days * 96, 12000);
+  const barsCount = Math.min(Math.max(days * 96, 2880), 70080);
   const now = Date.now();
   const symUpper = symbol.toUpperCase();
 
@@ -597,6 +598,7 @@ export async function POST(request: Request) {
           const dd = round(((peakCapital - capital) / peakCapital) * 100, 2);
 
           activeTrade.exit_time = new Date(c.timestamp).toISOString();
+          activeTrade.exit_price = activeTrade.tp;
           activeTrade.final_r = round(finalR, 2);
           activeTrade.pnl_usdt = round(pnlUsdt, 2);
           activeTrade.outcome = "WIN";
@@ -625,6 +627,7 @@ export async function POST(request: Request) {
           const dd = round(((peakCapital - capital) / peakCapital) * 100, 2);
 
           activeTrade.exit_time = new Date(c.timestamp).toISOString();
+          activeTrade.exit_price = activeTrade.sl;
           activeTrade.final_r = round(finalR, 2);
           activeTrade.pnl_usdt = round(pnlUsdt, 2);
           activeTrade.outcome = outcome;
@@ -811,18 +814,80 @@ export async function POST(request: Request) {
       s.profit_factor = round(s.wins > 0 ? (s.wins / Math.max(1, s.losses)) * (target_rr * 0.7) : 0.8, 2);
     }
 
-    // Monthly Performance Matrix
+    // Monthly Performance Matrix & Interactive Daily Breakdown
     const monthlyPerf: Record<string, any> = {};
+    const monthDaysMap: Record<string, Record<string, any>> = {};
+
     for (const t of trades) {
-      const ym = (t.exit_time || t.entry_time).substring(0, 7);
+      const timeStr = t.exit_time || t.entry_time || "";
+      const ym = timeStr.substring(0, 7) || "Unknown";
+      const dateStr = timeStr.substring(0, 10) || ym;
+
       if (!monthlyPerf[ym]) {
-        monthlyPerf[ym] = { month: ym, trades: 0, wins: 0, net_pnl_usdt: 0, total_r: 0 };
+        monthlyPerf[ym] = {
+          month: ym,
+          trades: 0,
+          wins: 0,
+          losses: 0,
+          breakevens: 0,
+          net_pnl_usdt: 0,
+          total_r: 0,
+          days: []
+        };
+        monthDaysMap[ym] = {};
       }
       const m = monthlyPerf[ym];
       m.trades++;
-      if ((t.final_r ?? 0) > 0) m.wins++;
+      const r = t.final_r ?? 0;
+      if (r > 0) m.wins++;
+      else if (r < 0) m.losses++;
+      else m.breakevens++;
+
       m.net_pnl_usdt += t.pnl_usdt || 0;
-      m.total_r += t.final_r || 0;
+      m.total_r += r;
+
+      // Group into days for this month
+      if (!monthDaysMap[ym][dateStr]) {
+        const dObj = new Date(dateStr + "T00:00:00Z");
+        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const dayName = !isNaN(dObj.getTime()) ? dayNames[dObj.getUTCDay()] : "";
+
+        monthDaysMap[ym][dateStr] = {
+          date: dateStr,
+          day_name: dayName,
+          trades_count: 0,
+          wins: 0,
+          losses: 0,
+          breakevens: 0,
+          net_pnl_usdt: 0,
+          total_r: 0,
+          strategies: new Set<string>(),
+          trades: []
+        };
+      }
+
+      const dayObj = monthDaysMap[ym][dateStr];
+      dayObj.trades_count++;
+      if (r > 0) dayObj.wins++;
+      else if (r < 0) dayObj.losses++;
+      else dayObj.breakevens++;
+
+      dayObj.net_pnl_usdt += t.pnl_usdt || 0;
+      dayObj.total_r += r;
+      if (t.strategy_name) dayObj.strategies.add(t.strategy_name);
+
+      dayObj.trades.push({
+        entry_time: t.entry_time,
+        exit_time: t.exit_time,
+        strategy_name: t.strategy_name,
+        side: t.side,
+        entry: round(t.entry, t.entry > 100 ? 2 : 5),
+        exit: round(t.exit_price ?? t.entry, (t.exit_price ?? t.entry) > 100 ? 2 : 5),
+        outcome: t.outcome || "BE",
+        final_r: round(t.final_r ?? 0, 2),
+        pnl_usdt: round(t.pnl_usdt ?? 0, 2),
+        deepseek_score: t.deepseek_score || 0
+      });
     }
 
     for (const ym of Object.keys(monthlyPerf)) {
@@ -830,6 +895,24 @@ export async function POST(request: Request) {
       m.win_rate_pct = m.trades > 0 ? round((m.wins / m.trades) * 100, 1) : 0;
       m.net_pnl_usdt = round(m.net_pnl_usdt, 2);
       m.total_r = round(m.total_r, 1);
+
+      // Convert daysMap to sorted array
+      const rawDays = Object.values(monthDaysMap[ym] || {});
+      m.days = rawDays
+        .sort((a: any, b: any) => a.date.localeCompare(b.date))
+        .map((d: any) => ({
+          date: d.date,
+          day_name: d.day_name,
+          trades_count: d.trades_count,
+          wins: d.wins,
+          losses: d.losses,
+          breakevens: d.breakevens,
+          win_rate_pct: d.trades_count > 0 ? round((d.wins / d.trades_count) * 100, 1) : 0,
+          net_pnl_usdt: round(d.net_pnl_usdt, 2),
+          total_r: round(d.total_r, 2),
+          strategies: Array.from(d.strategies),
+          trades: d.trades
+        }));
     }
 
     // Downsample equity curve to ~80 data points for Chart.js
