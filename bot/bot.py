@@ -2525,7 +2525,10 @@ def scan_and_execute_signals(
                     gemini_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
                     qwen_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
                     deepseek_rep = {"verdict": "Bypassed (Raw Technical Mode)"}
-                    council_scores = None
+                    council_scores = {
+                        "mode": "raw_technical",
+                        "total": 100
+                    }
                 elif active_prov in ["council_3model", "council"]:
                     candidate_setup_dict = {
                         "symbol": symbol,
@@ -2602,7 +2605,18 @@ def scan_and_execute_signals(
                         "macro_or_funding_veto": veto_triggered and ("macro" in str(veto_reason).lower() or "funding" in str(veto_reason).lower()),
                         "quant_summary": raw_audit.get("execution_notes", "Evaluated autonomously by DeepSeek Lead Auditor.")
                     }
-                    council_scores = None
+                    council_scores = {
+                        "mode": active_prov,
+                        "total": total_score,
+                        "deepseek": total_score
+                    }
+
+                # Ensure council_scores is never None/null (satisfies database not-null constraint)
+                if not council_scores or not isinstance(council_scores, dict):
+                    council_scores = {
+                        "mode": active_prov,
+                        "total": total_score
+                    }
 
                 # Log to ai_audit_logs
                 supabase.table("ai_audit_logs").insert({
