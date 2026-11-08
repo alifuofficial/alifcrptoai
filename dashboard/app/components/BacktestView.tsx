@@ -71,6 +71,8 @@ interface BacktestReport {
   monthly_performance?: Record<string, any>;
   equity_curve: Array<{ timestamp: string; equity: number; drawdown_pct: number }>;
   sample_trades: Array<any>;
+  data_source?: string;
+  is_real_data?: boolean;
   ai_provider?: string;
   ai_model?: string;
   ai_audit_stats?: {
@@ -345,11 +347,25 @@ export default function BacktestView() {
         </div>
 
         {report && (
-          <div className="flex items-center gap-3 text-xs text-slate-600 bg-slate-50 px-3.5 py-2 rounded-lg border border-slate-200/60 self-start md:self-auto">
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
-            <span>
-              Last Tested: <strong className="text-slate-800">{report.symbol}</strong> ({report.lookback_days} Days) on ${report.initial_capital.toLocaleString()} initial equity
-            </span>
+          <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-600 bg-slate-50 px-3.5 py-2 rounded-lg border border-slate-200/60 self-start md:self-auto">
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              <span>
+                Last Tested: <strong className="text-slate-800">{report.symbol}</strong> ({report.lookback_days} Days) on ${report.initial_capital.toLocaleString()} initial equity
+              </span>
+            </div>
+            {report.data_source && (
+              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                report.data_source.includes("Dukascopy")
+                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                  : report.data_source.includes("Binance")
+                  ? "bg-amber-50 text-amber-800 border-amber-200"
+                  : "bg-blue-50 text-blue-800 border-blue-200"
+              }`}>
+                <Shield className="w-3 h-3" />
+                {report.data_source}
+              </span>
+            )}
           </div>
         )}
       </div>
