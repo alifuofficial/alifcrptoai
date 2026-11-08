@@ -1157,6 +1157,26 @@ export default function CommandCenterPage() {
     return { totalClosed, totalWins, totalNetPnl, winRate };
   }, [perfView]);
 
+  // Cluster-based forensic loss aggregation (groups autopsies to prevent N=1 overfitting)
+  const failureClusters = useMemo(() => {
+    const clusterMap: Record<string, { strategy: string; category: string; count: number; recentTradeId: number }> = {};
+    (autopsies || []).forEach((a) => {
+      const cat = a.failure_category || "unspecified_loss";
+      const strat = a.strategy_name || "Unknown";
+      const key = `${strat}:${cat}`;
+      if (!clusterMap[key]) {
+        clusterMap[key] = {
+          strategy: strat,
+          category: cat,
+          count: 0,
+          recentTradeId: a.trade_id,
+        };
+      }
+      clusterMap[key].count += 1;
+    });
+    return Object.values(clusterMap).sort((x, y) => y.count - x.count);
+  }, [autopsies]);
+
   const formatTimeAgo = (dateStr?: string) => {
     if (!dateStr) return "Just now";
     try {
@@ -3351,7 +3371,7 @@ export default function CommandCenterPage() {
                   </h3>
                   <p className="text-xs text-textMuted mt-1 max-w-2xl leading-relaxed">
                     When enabled, DeepSeek post-mortem forensic lessons automatically quarantine underperforming strategies
-                    (Profit Factor &lt; 0.80) and inject verified guardrails directly into live prompt caches.
+                    (Profit Factor &lt; 0.80) and inject verified guardrails directly into live prompt caches and quantitative rule parameters.
                   </p>
                 </div>
 
@@ -3378,6 +3398,90 @@ export default function CommandCenterPage() {
                     />
                   </button>
                 </div>
+
+                <div className="w-full mt-2 pt-3 border-t border-border flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    Cluster Learning Active (&ge;3 matching losses required to promote guardrail)
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-50 border border-purple-200 text-purple-800 text-xs font-semibold">
+                    <Zap className="w-3.5 h-3.5 text-purple-600" />
+                    Dynamic Quantitative Parameter Wiring Active (AI &amp; Raw Tech)
+                  </span>
+                </div>
+              </div>
+
+              {/* Failure Clusters Forensic Matrix */}
+              <div className="bg-surface border border-border rounded-lg p-5">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-textMain flex items-center gap-1.5">
+                      <Target className="w-3.5 h-3.5 text-brand-500" />
+                      Forensic Failure Clusters &amp; Verification Progress
+                    </h4>
+                    <p className="text-[11px] text-textMuted mt-0.5">
+                      Aggregates historical losses to prevent N=1 overfitting. Guardrails and dynamic parameter overrides are only promoted when &ge;3 identical failures occur.
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                    {failureClusters.length} Pattern(s) Tracked
+                  </span>
+                </div>
+
+                {failureClusters.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-textMuted border border-dashed border-border rounded-md">
+                    No failure clusters recorded yet. System executing cleanly.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {failureClusters.map((fc, idx) => {
+                      const isVerified = fc.count >= 3;
+                      const isEmerging = fc.count === 2;
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-3.5 rounded-lg border transition-all ${
+                            isVerified
+                              ? "bg-purple-50/60 border-purple-200 ring-1 ring-purple-300/40"
+                              : isEmerging
+                              ? "bg-amber-50/60 border-amber-200"
+                              : "bg-slate-50/70 border-border"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-800">
+                              {fc.strategy}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                                isVerified
+                                  ? "bg-purple-100 text-purple-800 border border-purple-300 font-mono"
+                                  : isEmerging
+                                  ? "bg-amber-100 text-amber-800 border border-amber-300"
+                                  : "bg-slate-200 text-slate-700"
+                              }`}
+                            >
+                              {isVerified ? "3/3 Verified" : isEmerging ? "2/3 Emerging" : "1/3 Isolated"}
+                            </span>
+                          </div>
+                          <div className="text-xs font-semibold text-textMain mb-2 capitalize">
+                            {fc.category.replace(/_/g, " ")}
+                          </div>
+                          {/* 3-Step Progress Bar */}
+                          <div className="w-full bg-slate-200 rounded-full h-1.5 flex gap-0.5 overflow-hidden">
+                            <div className={`h-full flex-1 ${fc.count >= 1 ? (isVerified ? "bg-purple-600" : isEmerging ? "bg-amber-500" : "bg-slate-500") : "bg-transparent"}`} />
+                            <div className={`h-full flex-1 ${fc.count >= 2 ? (isVerified ? "bg-purple-600" : "bg-amber-500") : "bg-transparent"}`} />
+                            <div className={`h-full flex-1 ${fc.count >= 3 ? "bg-purple-600" : "bg-transparent"}`} />
+                          </div>
+                          <div className="flex items-center justify-between mt-2 text-[10px] text-textMuted">
+                            <span>{fc.count} occurrence{fc.count > 1 ? "s" : ""}</span>
+                            <span>{isVerified ? "Guardrail Active 🛡️" : `${3 - fc.count} more to activate`}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Guardrails Queue */}
@@ -3421,10 +3525,18 @@ export default function CommandCenterPage() {
                           <div className="text-xs text-textMuted mb-2 leading-relaxed">
                             <strong>Prompt Guardrail Rule:</strong> <em>&quot;{lesson.prompt_guardrail_rule}&quot;</em>
                           </div>
-                          <div className="text-[11px] text-brand-600 font-mono mb-3">
+                          <div className="text-[11px] text-brand-600 font-mono mb-2">
                             Suggested Param: {lesson.suggested_param_key} = {JSON.stringify(lesson.suggested_param_value)} (
                             {lesson.win_rate_impact})
                           </div>
+                          {lesson.status === "ACTIVE" && lesson.suggested_param_key && (
+                            <div className="flex items-center gap-1.5 p-2 rounded bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-800 font-medium mb-3">
+                              <Zap className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>
+                                <strong>Active Quantitative Execution Override:</strong> <code>{lesson.suggested_param_key} = {JSON.stringify(lesson.suggested_param_value)}</code> applied directly to {lesson.strategy_name} in both AI and Raw Technical modes.
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         {lesson.status === "PENDING" && (
@@ -4094,6 +4206,19 @@ export default function CommandCenterPage() {
                       💡 <strong>Automatic Live Switch:</strong> Once real balance (&ge; $10) is deposited to {formSettings.exchange_mode === "bybit" ? "Bybit" : formSettings.exchange_mode === "binance" ? "Binance" : "Binance or Bybit"}, the bot automatically trades with your live balance.
                     </span>
                   </div>
+
+                  {/* Micro-Account Lot Guard Banner if balance or simulated equity < $100 */}
+                  {Number(formSettings.simulated_equity ?? 1000) < 100 && (
+                    <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2.5">
+                      <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">Micro-Account Lot Guard Active (&lt; $100 Balance Protection)</p>
+                        <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                          For small budgets, the engine enforces Bybit/broker minimums (0.01 lot = 1,000 units), caps initial margin utilization to &lt;70%, and strictly skips trades where stop-loss distance exceeds an 8.0% hard risk ceiling to protect your balance from margin calls.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

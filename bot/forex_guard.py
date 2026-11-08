@@ -171,10 +171,10 @@ def calculate_forex_position_size(
     """
     Calculates precise lot/unit position sizing so total risk strictly equals:
     equity * risk_pct (e.g. $10,000 * 1% = $100 risk).
-    Enforces broker maximum leverage boundaries.
+    Enforces broker maximum leverage boundaries and Micro-Account Protections (<$100).
     """
     if equity <= 0:
-        equity = 10000.0  # Reference nominal equity for zero-balance paper tracking
+        equity = 1000.0  # Reference nominal equity for zero-balance paper tracking
 
     risk_dollars = equity * risk_pct
     price_distance = abs(float(entry_price) - float(sl_price))
@@ -183,21 +183,77 @@ def calculate_forex_position_size(
     if price_distance <= 0:
         price_distance = pip_size * 15.0  # Default 15 pips risk buffer
 
-    # Lot units calculation: Units = Risk Dollars / Price Distance
-    raw_units = risk_dollars / price_distance
+    pips = round(price_distance / pip_size, 1)
+    is_metal = "XAU" in symbol or "XAG" in symbol
 
-    # Maximum position size under leverage ceiling
+    # =========================================================================
+    # 🛡️ MICRO-ACCOUNT PROTECTION (< $100.00 BALANCE)
+    # =========================================================================
+    if equity < 100.0:
+        if is_metal:
+            min_units = 0.01  # Minimum 0.01 oz / contract for metals
+            required_margin = (min_units * float(entry_price)) / max(max_leverage, 1)
+            dollar_risk = min_units * price_distance
+        else:
+            min_units = 1000.0  # 1 Micro Lot = 1,000 units (0.01 standard lot)
+            required_margin = (min_units * float(entry_price)) / max(max_leverage, 1)
+            dollar_risk = min_units * price_distance
+
+        actual_risk_pct = dollar_risk / equity
+        margin_utilization = required_margin / equity
+
+        # 1. Margin Safety Check (Never allow > 75% of equity consumed by initial margin)
+        if margin_utilization > 0.75:
+            print(
+                f"[risk] 🛡️ Micro-Account Lot Guard: Order on {symbol} requires ${required_margin:.2f} margin "
+                f"on ${equity:.2f} equity ({margin_utilization * 100:.1f}% margin utilization at {max_leverage}x leverage). "
+                f"Exceeds 75% safety ceiling. SKIPPING trade to prevent margin call."
+            )
+            return 0.0
+
+        # 2. Risk Ceiling Check (Never allow > 8% account risk on a single trade in micro-sprint mode)
+        if actual_risk_pct > 0.08:
+            print(
+                f"[risk] 🛡️ Micro-Account Lot Guard: Minimum order size on {symbol} with {pips} pips SL "
+                f"results in ${dollar_risk:.2f} risk ({actual_risk_pct * 100:.1f}% of ${equity:.2f} equity). "
+                f"Exceeds micro-sprint 8.0% hard ceiling. SKIPPING trade to prevent drawdown ruin."
+            )
+            return 0.0
+
+        print(
+            f"[risk] 🛡️ Micro-Account Sprint Approved: {min_units} units on {symbol} (${equity:.2f} balance). "
+            f"Margin: ${required_margin:.2f} ({margin_utilization * 100:.1f}%), "
+            f"Risk: ${dollar_risk:.2f} ({actual_risk_pct * 100:.1f}%, {pips} pips SL)."
+        )
+        return min_units
+
+    # =========================================================================
+    # 🏛️ STANDARD & INSTITUTIONAL ACCOUNT SIZING (>= $100.00 BALANCE)
+    # =========================================================================
+    raw_units = risk_dollars / price_distance
     max_allowable_units = (equity * max_leverage) / float(entry_price)
     units = min(raw_units, max_allowable_units)
 
-    # Standard Forex contract lots: 1 Standard Lot = 100,000 units, 1 Mini = 10,000, 1 Micro = 1,000
-    # In Bybit / CCXT contracts, order amount is typically in base units or contract quantity
-    if "XAU" in symbol or "XAG" in symbol:
-        return round(units, 2)
-    elif units >= 1000:
-        return round(units, 0)
+    if is_metal:
+        qty = round(units, 2)
+        return max(qty, 0.01) if (0.01 * price_distance) / equity <= 0.05 else 0.0
     else:
-        return round(units, 2)
+        # Standard Forex contract lots: round to nearest 1,000 units (0.01 lot)
+        lot_chunks = int(units // 1000) * 1000
+        if lot_chunks >= 1000:
+            return float(lot_chunks)
+
+        # If raw units are between 500 and 1000, verify if 1,000 units (0.01 lot) is within 2.5% tolerance
+        min_units = 1000.0
+        min_risk_pct = (min_units * price_distance) / equity
+        if min_risk_pct <= max(risk_pct * 1.5, 0.025):
+            return min_units
+        else:
+            print(
+                f"[risk] Standard Account Sizing: Calculated {units:.0f} units on {symbol} is below broker minimum 1,000 units "
+                f"and forced 1,000 units would risk {min_risk_pct * 100:.2f}% (above allowed tolerance). Skipping."
+            )
+            return 0.0
 
 
 def calc_asian_range_benchmarks(df_15m: Any, symbol: str = "EUR/USD") -> Dict[str, Any]:

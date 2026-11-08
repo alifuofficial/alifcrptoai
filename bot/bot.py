@@ -1566,18 +1566,57 @@ def run_trade_autopsy(supabase: Client, deepseek_client: OpenAI, cfg: Dict[str, 
             "recommended_rule_adjustment": autopsy_data.get("recommended_rule_adjustment", "Enforce higher RVOL.")
         }).execute()
 
-        # 2. Insert into bot_lessons (PENDING approval unless auto_apply is enabled)
-        initial_status = "ACTIVE" if cfg.get("auto_apply_lessons", False) else "PENDING"
-        supabase.table("bot_lessons").insert({
-            "symbol": trade["symbol"],
-            "strategy_name": trade["strategy_name"],
-            "weakness_detected": f"[{session_tag}] " + str(autopsy_data.get("failure_category", "Risk weakness")),
-            "prompt_guardrail_rule": autopsy_data.get("prompt_guardrail_rule", "Require clean displacement."),
-            "suggested_param_key": autopsy_data.get("suggested_param_key", "min_rvol"),
-            "suggested_param_value": autopsy_data.get("suggested_param_value", 1.4),
-            "win_rate_impact": autopsy_data.get("win_rate_impact", "+3-5% expected win rate"),
-            "status": initial_status
-        }).execute()
+        # 2. Cluster Aggregation Check: Count historical autopsies with this failure category for this strategy
+        strat_name = trade.get("strategy_name", "Unknown")
+        fail_cat = autopsy_data.get("failure_category", "premature_entry_before_sweep")
+        cluster_count = 1
+        try:
+            cluster_res = (
+                supabase.table("trade_autopsies")
+                .select("id")
+                .eq("strategy_name", strat_name)
+                .eq("failure_category", fail_cat)
+                .execute()
+            )
+            cluster_count = len(cluster_res.data or [])
+        except Exception as c_err:
+            print(f"[autopsy] Cluster query warning: {c_err}")
+
+        # 3. Cluster Promotion: Only inject active/pending guardrail if >= 3 matching failures occur (P14 Cluster Fix)
+        if cluster_count >= 3:
+            initial_status = "ACTIVE" if cfg.get("auto_apply_lessons", False) else "PENDING"
+            
+            # Check if active/pending lesson already exists for this strategy and failure category
+            existing_lesson = None
+            try:
+                exist_res = (
+                    supabase.table("bot_lessons")
+                    .select("id")
+                    .eq("strategy_name", strat_name)
+                    .ilike("weakness_detected", f"%{fail_cat}%")
+                    .execute()
+                )
+                if exist_res.data and len(exist_res.data) > 0:
+                    existing_lesson = exist_res.data[0]
+            except Exception:
+                pass
+
+            if not existing_lesson:
+                supabase.table("bot_lessons").insert({
+                    "symbol": trade["symbol"],
+                    "strategy_name": strat_name,
+                    "weakness_detected": f"[{session_tag}] Verified Cluster ({cluster_count}x): {fail_cat}",
+                    "prompt_guardrail_rule": autopsy_data.get("prompt_guardrail_rule", "Require clean displacement."),
+                    "suggested_param_key": autopsy_data.get("suggested_param_key", "min_rvol"),
+                    "suggested_param_value": autopsy_data.get("suggested_param_value", 1.4),
+                    "win_rate_impact": autopsy_data.get("win_rate_impact", "+3-5% expected win rate"),
+                    "status": initial_status
+                }).execute()
+                print(f"[autopsy] 🎯 Cluster Verified ({cluster_count}/3)! Injected systemic guardrail & dynamic parameter override for {strat_name}.")
+            else:
+                print(f"[autopsy] 🎯 Cluster Active ({cluster_count}x): Systemic guardrail already registered for {strat_name} on {fail_cat}.")
+        else:
+            print(f"[autopsy] ℹ️ Isolated failure ({cluster_count}/3) on {strat_name} for '{fail_cat}'. Awaiting 3 matching failure clusters before creating restrictive guardrail.")
 
         # Mark autopsy completed
         supabase.table("trade_executions").update({"autopsy_completed": True}).eq("id", trade["id"]).execute()
@@ -2352,15 +2391,46 @@ def scan_and_execute_signals(
             print(f"[scanner] 🔥 {len(candidate_setups)} CANDIDATE SETUP(S) FOUND on {symbol} ({exchange_name.upper()}, Price: ${format_price_dynamic(latest_price)})!")
 
             for setup in candidate_setups:
-                rvol = setup.get("rvol", 1.0)
-                min_rvol_threshold = float(cfg.get("min_rvol", 1.0) or 1.0)
-                if rvol < min_rvol_threshold:
-                    print(f"[scanner] {symbol} {setup.get('strategy_name')} candidate skipped: RVOL {rvol:.2f}x < required {min_rvol_threshold:.2f}x volume threshold.")
-                    continue
-
                 side = setup.get("side")
                 strat_name = setup.get("strategy_name")
                 risk_pct = float(cfg.get("risk_pct", 0.01))
+
+                # P14 FIX: Query active guardrail lessons AND suggested parameter overrides for this symbol/strategy
+                strat_dyn_params = {}
+                active_lessons = []
+                try:
+                    lessons_query = (
+                        supabase.table("bot_lessons")
+                        .select("prompt_guardrail_rule, weakness_detected, suggested_param_key, suggested_param_value")
+                        .eq("status", "ACTIVE")
+                        .or_(f"strategy_name.eq.{strat_name},strategy_name.eq.ALL")
+                        .limit(5)
+                        .execute()
+                    )
+                    for l in (lessons_query.data or []):
+                        active_lessons.append(f"- {l['weakness_detected']}: {l['prompt_guardrail_rule']}")
+                        pkey = str(l.get("suggested_param_key") or "").strip().lower()
+                        pval = l.get("suggested_param_value")
+                        if pkey and pval is not None:
+                            try:
+                                if pkey in ["min_rvol", "min_score", "target_rr"]:
+                                    strat_dyn_params[pkey] = float(pval)
+                                elif pkey in ["max_hold_bars"]:
+                                    strat_dyn_params[pkey] = int(pval)
+                            except (ValueError, TypeError):
+                                pass
+                except Exception as l_err:
+                    print(f"[scanner] Lessons query warning: {l_err}")
+
+                lessons_block = "\n".join(active_lessons) if active_lessons else "No active historical failure guardrails."
+
+                # Dynamic RVOL Threshold: Overridden if an active lesson specifies a higher RVOL floor for this strategy
+                rvol = setup.get("rvol", 1.0)
+                min_rvol_threshold = float(strat_dyn_params.get("min_rvol") or cfg.get("min_rvol", 1.0) or 1.0)
+                if rvol < min_rvol_threshold:
+                    source_label = f"Dynamic Override from Lesson ({min_rvol_threshold:.2f}x)" if "min_rvol" in strat_dyn_params else "Config Default"
+                    print(f"[scanner] {symbol} {strat_name} candidate skipped: RVOL {rvol:.2f}x < required {min_rvol_threshold:.2f}x [{source_label}].")
+                    continue
 
                 # Check portfolio directional & currency-component risk lock (P9 FIX)
                 if not check_correlated_exposure(supabase, symbol, side, risk_pct, cfg.get("max_directional_exposure_pct", 0.015)):
@@ -2377,18 +2447,6 @@ def scan_and_execute_signals(
 
                 if dedup_key in _AUDITED_CANDLE_KEYS:
                     continue
-
-                # Query up to 5 active guardrail lessons for this symbol/strategy
-                lessons_query = (
-                    supabase.table("bot_lessons")
-                    .select("prompt_guardrail_rule, weakness_detected")
-                    .eq("status", "ACTIVE")
-                    .or_(f"strategy_name.eq.{strat_name},strategy_name.eq.ALL")
-                    .limit(5)
-                    .execute()
-                )
-                active_lessons = [f"- {l['weakness_detected']}: {l['prompt_guardrail_rule']}" for l in (lessons_query.data or [])]
-                lessons_block = "\n".join(active_lessons) if active_lessons else "No active historical failure guardrails."
 
                 # Calculate HTF 24h trend alignment
                 ema_50_val = float(ind_df["ema_50"].iloc[-1]) if "ema_50" in ind_df.columns else latest_price
@@ -2578,9 +2636,10 @@ def scan_and_execute_signals(
                 }).execute()
                 _AUDITED_CANDLE_KEYS[dedup_key] = time.time()
 
-                min_score = cfg.get("min_score", 70)
+                min_score = float(strat_dyn_params.get("min_score") or cfg.get("min_score", 70) or 70)
                 if veto_triggered or total_score < min_score:
-                    print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score}, Veto: {veto_triggered} ({veto_reason})")
+                    score_source = f"Dynamic Override from Lesson ({min_score})" if "min_score" in strat_dyn_params else "Config Default"
+                    print(f"[scanner] Setup rejected for {symbol}: Score {total_score}/{min_score} [{score_source}], Veto: {veto_triggered} ({veto_reason})")
                     continue
 
                 # --- POSITION SIZING ---
@@ -2614,6 +2673,11 @@ def scan_and_execute_signals(
                     position_qty = round(raw_qty, 2 if raw_qty >= 10.0 else (4 if raw_qty >= 0.01 else 6))
                     if position_qty <= 0:
                         position_qty = 0.01
+
+                # Micro-Account Lot Guard & Leverage Zero-Rejection Check
+                if position_qty <= 0:
+                    print(f"[risk] 🛡️ Position size on {symbol} returned 0.0 units (Micro-Account Lot Guard or safety limit triggered). Skipping trade to preserve capital.")
+                    continue
 
                 is_simulated = is_zero_balance_mode or cfg.get("sandbox_mode", True)
 
