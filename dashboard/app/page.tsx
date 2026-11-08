@@ -1101,11 +1101,23 @@ export default function CommandCenterPage() {
         showToast("Configuration & API keys successfully committed to database!", "success");
       } else {
         // Fallback: client Supabase upsert
-        const { data: upsertData, error: upsertErr } = await supabase
+        let { data: upsertData, error: upsertErr } = await supabase
           .from("bot_config")
           .upsert({ id: 1, ...updates, updated_at: new Date().toISOString() }, { onConflict: "id" })
           .select()
           .single();
+
+        if (upsertErr && (upsertErr.code === "PGRST204" || upsertErr.message?.includes("simulated_equity"))) {
+          const clientFallback: Record<string, any> = { ...updates };
+          delete clientFallback.simulated_equity;
+          const retry = await supabase
+            .from("bot_config")
+            .upsert({ id: 1, ...clientFallback, updated_at: new Date().toISOString() }, { onConflict: "id" })
+            .select()
+            .single();
+          upsertData = retry.data ? { ...retry.data, simulated_equity: updates.simulated_equity } : null;
+          upsertErr = retry.error;
+        }
 
         if (!upsertErr && upsertData) {
           setConfig(upsertData);

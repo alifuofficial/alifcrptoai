@@ -215,23 +215,49 @@ export async function POST(req: Request) {
     }
 
     // Use UPSERT so it will insert row 1 if missing, or update if existing!
-    const { data: saved, error } = await supabase
+    let { data: saved, error } = await supabase
       .from("bot_config")
       .upsert(payload, { onConflict: "id" })
       .select()
       .single();
 
     if (error) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
-        },
-        { status: 400 }
-      );
+      if (payload.simulated_equity !== undefined && (error.code === "PGRST204" || error.message?.includes("simulated_equity"))) {
+        const fallbackPayload: Record<string, any> = { ...payload };
+        const requestedSimEquity = fallbackPayload.simulated_equity;
+        delete fallbackPayload.simulated_equity;
+
+        const { data: retrySaved, error: retryErr } = await supabase
+          .from("bot_config")
+          .upsert(fallbackPayload, { onConflict: "id" })
+          .select()
+          .single();
+
+        if (retryErr) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: retryErr.message,
+              code: retryErr.code,
+              details: retryErr.details,
+              hint: retryErr.hint,
+            },
+            { status: 400 }
+          );
+        }
+        saved = { ...retrySaved, simulated_equity: requestedSimEquity };
+      } else {
+        return NextResponse.json(
+          {
+            success: false,
+            error: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const maskKey = (val?: string | null) => {
