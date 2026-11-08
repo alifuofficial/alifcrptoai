@@ -88,6 +88,7 @@ export default function BacktestView() {
   const [initialCapital, setInitialCapital] = useState<number>(100); // Default $100
   const [targetRR, setTargetRR] = useState<number>(2.5);
   const [aiProvider, setAiProvider] = useState<string>("deepseek");
+  const [minScore, setMinScore] = useState<number>(60); // Default 60 for optimal signal velocity & compounding
 
   // Custom input states
   const [customDays, setCustomDays] = useState<string>("365");
@@ -100,14 +101,56 @@ export default function BacktestView() {
   const [pastRuns, setPastRuns] = useState<BacktestReport[]>([]);
   const [loadingPastRuns, setLoadingPastRuns] = useState<boolean>(false);
 
-  // Common quick symbols
-  const SYMBOL_PRESETS = [
-    { label: "BTC/USDT", value: "BTC/USDT" },
-    { label: "ETH/USDT", value: "ETH/USDT" },
-    { label: "SOL/USDT", value: "SOL/USDT" },
-    { label: "EUR/USD", value: "EUR/USD" },
-    { label: "GBP/USD", value: "GBP/USD" },
-    { label: "XAU/USD (Gold)", value: "XAU/USD" },
+  // Grouped Multi-Asset Presets (Indices, Forex, Commodities, Crypto)
+  const ASSET_GROUPS = [
+    {
+      group: "📈 US & Global Indices",
+      items: [
+        { label: "NAS100 (Nasdaq 100)", value: "NAS100" },
+        { label: "SPX500 (S&P 500)", value: "SPX500" },
+        { label: "US30 (Dow Jones 30)", value: "US30" },
+        { label: "GER40 (DAX 40)", value: "GER40" },
+        { label: "UK100 (FTSE 100)", value: "UK100" },
+        { label: "NIKKEI (Nikkei 225)", value: "NIKKEI" },
+      ],
+    },
+    {
+      group: "💱 Forex Majors & Crosses",
+      items: [
+        { label: "GBP/USD (British Pound)", value: "GBP/USD" },
+        { label: "EUR/USD (Euro / USD)", value: "EUR/USD" },
+        { label: "USD/JPY (USD / Japanese Yen)", value: "USD/JPY" },
+        { label: "AUD/USD (Australian Dollar)", value: "AUD/USD" },
+        { label: "USD/CAD (USD / Canadian Dollar)", value: "USD/CAD" },
+        { label: "USD/CHF (USD / Swiss Franc)", value: "USD/CHF" },
+        { label: "EUR/GBP (Euro / British Pound)", value: "EUR/GBP" },
+        { label: "GBP/JPY (British Pound / Yen)", value: "GBP/JPY" },
+      ],
+    },
+    {
+      group: "🪙 Commodities",
+      items: [
+        { label: "XAU/USD (Gold Spot & Futures)", value: "XAU/USD" },
+        { label: "XAG/USD (Silver)", value: "XAG/USD" },
+        { label: "USOIL (Crude Oil WTI)", value: "USOIL" },
+      ],
+    },
+    {
+      group: "⚡ Crypto Futures",
+      items: [
+        { label: "BTC/USDT (Bitcoin)", value: "BTC/USDT" },
+        { label: "ETH/USDT (Ethereum)", value: "ETH/USDT" },
+        { label: "SOL/USDT (Solana)", value: "SOL/USDT" },
+        { label: "BNB/USDT (BNB)", value: "BNB/USDT" },
+        { label: "XRP/USDT (Ripple)", value: "XRP/USDT" },
+        { label: "DOGE/USDT (Dogecoin)", value: "DOGE/USDT" },
+        { label: "SUI/USDT (Sui Network)", value: "SUI/USDT" },
+        { label: "PEPE/USDT (Pepe)", value: "PEPE/USDT" },
+        { label: "AVAX/USDT (Avalanche)", value: "AVAX/USDT" },
+        { label: "LINK/USDT (Chainlink)", value: "LINK/USDT" },
+        { label: "NEAR/USDT (NEAR Protocol)", value: "NEAR/USDT" },
+      ],
+    },
   ];
 
   // Quick Days Presets
@@ -183,6 +226,7 @@ export default function BacktestView() {
           initial_capital: effectiveCapital,
           target_rr: targetRR,
           ai_provider: aiProvider,
+          min_score: minScore,
         }),
       });
 
@@ -316,13 +360,24 @@ export default function BacktestView() {
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">Asset / Trading Pair</label>
             <select
               value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
+              onChange={(e) => {
+                const newSym = e.target.value;
+                setSymbol(newSym);
+                const isFxOrIdx = ["NAS", "SPX", "US30", "GER", "UK", "NIKKEI", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF"].some(x => newSym.toUpperCase().includes(x));
+                if (isFxOrIdx && minScore > 65) {
+                  setMinScore(60);
+                }
+              }}
               className="w-full text-xs font-medium bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-brand-500 focus:outline-hidden"
             >
-              {SYMBOL_PRESETS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
+              {ASSET_GROUPS.map((grp) => (
+                <optgroup key={grp.group} label={grp.group}>
+                  {grp.items.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -442,40 +497,93 @@ export default function BacktestView() {
         </div>
 
         {/* AI Risk Officer Selector Row */}
-        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Shield className="w-4 h-4 text-brand-600" />
-            <span className="font-bold text-slate-700">AI Risk Officer &amp; Auditor Mode:</span>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setAiProvider("deepseek")}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
-                  aiProvider === "deepseek"
-                    ? "bg-indigo-600 text-white shadow-xs"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                🤖 DeepSeek V3 / R1 (Solo 100-pt Rubric Engine)
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider("raw")}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
-                  aiProvider === "raw"
-                    ? "bg-slate-700 text-white shadow-xs"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                ⚡ Raw Technical Strategy (No AI)
-              </button>
+        <div className="pt-3 border-t border-slate-100 flex flex-col gap-2.5 text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Shield className="w-4 h-4 text-brand-600" />
+              <span className="font-bold text-slate-700">AI Risk Officer &amp; Auditor Mode:</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setAiProvider("deepseek")}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                    aiProvider === "deepseek"
+                      ? "bg-indigo-600 text-white shadow-xs font-bold"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  🤖 DeepSeek V3 / R1 (Solo 100-pt Rubric Engine)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiProvider("raw")}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                    aiProvider === "raw"
+                      ? "bg-slate-700 text-white shadow-xs font-bold"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  ⚡ Raw Technical Strategy (No AI)
+                </button>
+              </div>
             </div>
+            <span className="text-[11px] text-slate-500 italic">
+              {aiProvider === "deepseek"
+                ? "Calibrated multi-asset rubric: adaptive session weighting, dealing ranges & displacement"
+                : "Tests raw indicator triggers without AI gatekeeping"}
+            </span>
           </div>
-          <span className="text-[11px] text-slate-500 italic">
-            {aiProvider === "deepseek"
-              ? "Enforces 100-pt discrete rubric, HTF discount/premium, and RVOL >= 1.4x"
-              : "Tests raw indicator triggers without AI gatekeeping"}
-          </span>
+
+          {/* AI Qualification Sensitivity Threshold Selector */}
+          {aiProvider === "deepseek" && (
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100/80 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> DeepSeek Sensitivity Threshold:
+              </span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setMinScore(60)}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-semibold cursor-pointer transition-colors ${
+                    minScore === 60
+                      ? "bg-emerald-600 text-white shadow-xs font-bold"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  ⚡ High-Growth (Score ≥ 60)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMinScore(65)}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-semibold cursor-pointer transition-colors ${
+                    minScore === 65
+                      ? "bg-brand-600 text-white shadow-xs font-bold"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  ⚖️ Balanced (Score ≥ 65)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMinScore(70)}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-semibold cursor-pointer transition-colors ${
+                    minScore === 70
+                      ? "bg-indigo-700 text-white shadow-xs font-bold"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  🎯 Ultra-Sniper (Score ≥ 70)
+                </button>
+              </div>
+              <span className="text-[10px] text-slate-500">
+                {minScore === 60
+                  ? "Recommended for Forex & Indices: unlocks high signal velocity & geometric compounding while retaining kill-switches."
+                  : minScore === 65
+                  ? "Balanced institutional grade: filters chop while maintaining steady signal flow."
+                  : "Ultra-selective: highest risk filter, rejects ~90% of trades for conservative preservation."}
+              </span>
+            </div>
+          )}
         </div>
 
         {errorMsg && (
@@ -623,6 +731,10 @@ export default function BacktestView() {
                 <div className="border-l border-indigo-200 pl-4">
                   <span className="text-indigo-600 font-sans block text-[10px] uppercase font-bold">Avg Score</span>
                   <strong className="text-sm text-brand-700">{ast.average_score}/100</strong>
+                </div>
+                <div className="border-l border-indigo-200 pl-4">
+                  <span className="text-indigo-600 font-sans block text-[10px] uppercase font-bold">Min Score Gate</span>
+                  <strong className="text-sm text-indigo-900">{ast.min_score_threshold || minScore}/100</strong>
                 </div>
               </div>
             );

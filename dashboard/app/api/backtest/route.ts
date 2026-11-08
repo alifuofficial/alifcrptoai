@@ -73,69 +73,125 @@ export async function GET(request: Request) {
   }
 }
 
-// Helper: Fetch real historical candles from Binance Futures or Bybit
+// Helper: Fetch real historical candles from Binance Futures, Bybit, or Yahoo Finance
 async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]> {
-  const isBybit = ["EUR", "GBP", "JPY", "XAU", "XAG"].some(f => symbol.toUpperCase().includes(f));
-  const targetBars = Math.min(days * 96, 35000); // 96 15m bars/day
-  const now = Date.now();
-  const startTime = now - days * 86400 * 1000;
+  const symUpper = symbol.toUpperCase().replace(":USDT", "");
+  const isIndex = ["NAS100", "NDX", "SPX500", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"].some(s => symUpper.includes(s));
+  const isCommodity = ["XAU", "GOLD", "XAG", "SILVER", "USOIL", "WTI", "CRUDE", "BRENT"].some(s => symUpper.includes(s));
+  const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"].some(s => symUpper.includes(s));
 
   try {
-    if (!isBybit) {
-      // Binance Futures USDT-M Public Klines
-      const cleanSym = symbol.replace("/", "").replace(":USDT", "").toUpperCase();
-      const batches = Math.ceil(targetBars / 1000);
-      const batchPromises: Promise<any[]>[] = [];
+    // 1. Indices & Commodities & Forex: Fetch from Yahoo Finance or Bybit
+    if (isIndex || isCommodity || isForex) {
+      // Map user symbol to Yahoo Finance ticker
+      let yahooTicker = "";
+      if (symUpper.includes("NAS") || symUpper.includes("NDX")) yahooTicker = "%5ENDX";
+      else if (symUpper.includes("SPX")) yahooTicker = "%5EGSPC";
+      else if (symUpper.includes("US30") || symUpper.includes("DJI")) yahooTicker = "%5EDJI";
+      else if (symUpper.includes("GER40") || symUpper.includes("DAX")) yahooTicker = "%5EGDAXI";
+      else if (symUpper.includes("UK100") || symUpper.includes("FTSE")) yahooTicker = "%5EFTSE";
+      else if (symUpper.includes("NIKKEI") || symUpper.includes("JP225")) yahooTicker = "%5EN225";
+      else if (symUpper.includes("USOIL") || symUpper.includes("WTI")) yahooTicker = "CL%3DF";
+      else if (symUpper.includes("XAU") || symUpper.includes("GOLD")) yahooTicker = "GC%3DF";
+      else if (symUpper.includes("XAG") || symUpper.includes("SILVER")) yahooTicker = "SI%3DF";
+      else if (symUpper.includes("EUR") && symUpper.includes("USD")) yahooTicker = "EURUSD%3DX";
+      else if (symUpper.includes("GBP") && symUpper.includes("USD")) yahooTicker = "GBPUSD%3DX";
+      else if (symUpper.includes("USD") && symUpper.includes("JPY")) yahooTicker = "USDJPY%3DX";
+      else if (symUpper.includes("AUD") && symUpper.includes("USD")) yahooTicker = "AUDUSD%3DX";
+      else if (symUpper.includes("USD") && symUpper.includes("CAD")) yahooTicker = "USDCAD%3DX";
+      else if (symUpper.includes("USD") && symUpper.includes("CHF")) yahooTicker = "USDCHF%3DX";
+      else if (symUpper.includes("EUR") && symUpper.includes("GBP")) yahooTicker = "EURGBP%3DX";
+      else if (symUpper.includes("GBP") && symUpper.includes("JPY")) yahooTicker = "GBPJPY%3DX";
 
-      for (let b = 0; b < Math.min(batches, 10); b++) {
-        const batchStart = startTime + b * 1000 * 15 * 60 * 1000;
-        if (batchStart >= now) break;
-        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=15m&startTime=${batchStart}&limit=1000`;
-        batchPromises.push(
-          fetch(url, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } })
-            .then(r => (r.ok ? r.json() : []))
-            .catch(() => [])
-        );
-      }
+      if (yahooTicker) {
+        // Yahoo provides up to 60 days of 15m bars, and 2 years of 1h bars
+        const use15m = days <= 60;
+        const interval = use15m ? "15m" : "1h";
+        const range = use15m ? "60d" : (days <= 365 ? "1y" : "2y");
+        const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=${interval}&range=${range}`;
 
-      const results = await Promise.all(batchPromises);
-      const allBars: Candle[] = [];
-      const seenTs = new Set<number>();
+        const res = await fetch(yahooUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+          next: { revalidate: 3600 }
+        });
 
-      for (const batch of results) {
-        if (Array.isArray(batch)) {
-          for (const item of batch) {
-            const ts = Number(item[0]);
-            if (!seenTs.has(ts)) {
-              seenTs.add(ts);
-              allBars.push({
-                timestamp: ts,
-                open: parseFloat(item[1]),
-                high: parseFloat(item[2]),
-                low: parseFloat(item[3]),
-                close: parseFloat(item[4]),
-                volume: parseFloat(item[5])
-              });
+        if (res.ok) {
+          const json = await res.json();
+          const result = json?.chart?.result?.[0];
+          const timestamps = result?.timestamp || [];
+          const quote = result?.indicators?.quote?.[0] || {};
+          const parsedBars: Candle[] = [];
+
+          for (let i = 0; i < timestamps.length; i++) {
+            const o = quote.open?.[i];
+            const h = quote.high?.[i];
+            const l = quote.low?.[i];
+            const c = quote.close?.[i];
+            const v = quote.volume?.[i] ?? 1000;
+            if (o != null && h != null && l != null && c != null) {
+              const baseTs = timestamps[i] * 1000;
+
+              if (use15m) {
+                // Direct 15m bar
+                parsedBars.push({ timestamp: baseTs, open: o, high: h, low: l, close: c, volume: v });
+              } else {
+                // Expand 1-hour bar into four realistic 15m sub-bars preserving OHLC extremes
+                const subV = Math.max(10, v / 4);
+                parsedBars.push({
+                  timestamp: baseTs,
+                  open: o,
+                  high: Math.max(o, (o + h) / 2),
+                  low: Math.min(o, (o + l) / 2),
+                  close: (o + c) / 2,
+                  volume: subV
+                });
+                parsedBars.push({
+                  timestamp: baseTs + 15 * 60 * 1000,
+                  open: (o + c) / 2,
+                  high: h,
+                  low: Math.min((o + c) / 2, l),
+                  close: h > c ? (h + c) / 2 : c,
+                  volume: subV
+                });
+                parsedBars.push({
+                  timestamp: baseTs + 30 * 60 * 1000,
+                  open: h > c ? (h + c) / 2 : c,
+                  high: Math.max(h, c),
+                  low: l,
+                  close: (l + c) / 2,
+                  volume: subV
+                });
+                parsedBars.push({
+                  timestamp: baseTs + 45 * 60 * 1000,
+                  open: (l + c) / 2,
+                  high: Math.max((l + c) / 2, c),
+                  low: Math.min((l + c) / 2, l),
+                  close: c,
+                  volume: subV
+                });
+              }
             }
+          }
+
+          if (parsedBars.length >= 100) {
+            parsedBars.sort((a, b) => a.timestamp - b.timestamp);
+            return parsedBars;
           }
         }
       }
 
-      if (allBars.length >= 200) {
-        allBars.sort((a, b) => a.timestamp - b.timestamp);
-        return allBars;
-      }
-    } else {
-      // Bybit Public Linear Klines
+      // Backup: Bybit linear klines for Forex/Commodities
       let bybitSym = symbol.replace("/", "").toUpperCase();
       if (bybitSym.includes("XAU")) bybitSym = "XAUUSDT";
-      if (bybitSym.includes("EUR")) bybitSym = "EURUSD";
-      if (bybitSym.includes("GBP")) bybitSym = "GBPUSD";
+      else if (bybitSym.includes("XAG")) bybitSym = "XAGUSDT";
+      else if (bybitSym.includes("EUR")) bybitSym = "EURUSD";
+      else if (bybitSym.includes("GBP")) bybitSym = "GBPUSD";
+      else if (bybitSym.includes("JPY")) bybitSym = "USDJPY";
 
-      const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${bybitSym}&interval=15&limit=1000`;
-      const res = await fetch(url, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } });
-      if (res.ok) {
-        const json = await res.json();
+      const bybitUrl = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${bybitSym}&interval=15&limit=1000`;
+      const resBybit = await fetch(bybitUrl, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } });
+      if (resBybit.ok) {
+        const json = await resBybit.json();
         const list = json?.result?.list || [];
         if (Array.isArray(list) && list.length >= 100) {
           const allBars: Candle[] = list.map((item: any) => ({
@@ -151,6 +207,55 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
         }
       }
     }
+
+    // 2. Crypto Futures: Fetch from Binance Futures USDT-M
+    let cleanSym = symbol.replace("/", "").replace(":USDT", "").toUpperCase();
+    if (cleanSym === "PEPEUSDT") cleanSym = "1000PEPEUSDT";
+
+    const targetBars = Math.min(days * 96, 35000);
+    const now = Date.now();
+    const startTime = now - days * 86400 * 1000;
+    const batches = Math.ceil(targetBars / 1000);
+    const batchPromises: Promise<any[]>[] = [];
+
+    for (let b = 0; b < Math.min(batches, 10); b++) {
+      const batchStart = startTime + b * 1000 * 15 * 60 * 1000;
+      if (batchStart >= now) break;
+      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=15m&startTime=${batchStart}&limit=1000`;
+      batchPromises.push(
+        fetch(url, { headers: { "User-Agent": "alifcrptoai/1.0" }, next: { revalidate: 3600 } })
+          .then(r => (r.ok ? r.json() : []))
+          .catch(() => [])
+      );
+    }
+
+    const results = await Promise.all(batchPromises);
+    const allBars: Candle[] = [];
+    const seenTs = new Set<number>();
+
+    for (const batch of results) {
+      if (Array.isArray(batch)) {
+        for (const item of batch) {
+          const ts = Number(item[0]);
+          if (!seenTs.has(ts)) {
+            seenTs.add(ts);
+            allBars.push({
+              timestamp: ts,
+              open: parseFloat(item[1]),
+              high: parseFloat(item[2]),
+              low: parseFloat(item[3]),
+              close: parseFloat(item[4]),
+              volume: parseFloat(item[5])
+            });
+          }
+        }
+      }
+    }
+
+    if (allBars.length >= 200) {
+      allBars.sort((a, b) => a.timestamp - b.timestamp);
+      return allBars;
+    }
   } catch (err) {
     console.warn("[backtest_engine] Real market fetch warning:", err);
   }
@@ -163,8 +268,39 @@ async function fetchRealCandles(symbol: string, days: number): Promise<Candle[]>
 function generateRealisticCandles(symbol: string, days: number): Candle[] {
   const barsCount = Math.min(days * 96, 12000);
   const now = Date.now();
-  const basePrice = symbol.includes("BTC") ? 88500 : symbol.includes("ETH") ? 3100 : symbol.includes("SOL") ? 185 : symbol.includes("XAU") ? 2650 : 1.085;
-  const vol = symbol.includes("BTC") ? 0.0035 : 0.0018;
+  const symUpper = symbol.toUpperCase();
+
+  let basePrice = 100.0;
+  let vol = 0.0020;
+
+  if (symUpper.includes("NAS") || symUpper.includes("NDX")) { basePrice = 21000; vol = 0.0016; }
+  else if (symUpper.includes("SPX")) { basePrice = 5900; vol = 0.0012; }
+  else if (symUpper.includes("US30") || symUpper.includes("DJI")) { basePrice = 43500; vol = 0.0010; }
+  else if (symUpper.includes("GER40") || symUpper.includes("DAX")) { basePrice = 19200; vol = 0.0015; }
+  else if (symUpper.includes("UK100") || symUpper.includes("FTSE")) { basePrice = 8400; vol = 0.0011; }
+  else if (symUpper.includes("NIKKEI") || symUpper.includes("JP225")) { basePrice = 39000; vol = 0.0018; }
+  else if (symUpper.includes("USOIL") || symUpper.includes("WTI")) { basePrice = 71.50; vol = 0.0025; }
+  else if (symUpper.includes("XAU") || symUpper.includes("GOLD")) { basePrice = 2680; vol = 0.0015; }
+  else if (symUpper.includes("XAG") || symUpper.includes("SILVER")) { basePrice = 31.50; vol = 0.0022; }
+  else if (symUpper.includes("EUR") && symUpper.includes("USD")) { basePrice = 1.085; vol = 0.0007; }
+  else if (symUpper.includes("GBP") && symUpper.includes("USD")) { basePrice = 1.295; vol = 0.0008; }
+  else if (symUpper.includes("USD") && symUpper.includes("JPY")) { basePrice = 153.5; vol = 0.0010; }
+  else if (symUpper.includes("AUD") && symUpper.includes("USD")) { basePrice = 0.665; vol = 0.0009; }
+  else if (symUpper.includes("USD") && symUpper.includes("CAD")) { basePrice = 1.385; vol = 0.0008; }
+  else if (symUpper.includes("USD") && symUpper.includes("CHF")) { basePrice = 0.865; vol = 0.0008; }
+  else if (symUpper.includes("EUR") && symUpper.includes("GBP")) { basePrice = 0.835; vol = 0.0007; }
+  else if (symUpper.includes("GBP") && symUpper.includes("JPY")) { basePrice = 198.5; vol = 0.0012; }
+  else if (symUpper.includes("BTC")) { basePrice = 88500; vol = 0.0035; }
+  else if (symUpper.includes("ETH")) { basePrice = 3100; vol = 0.0038; }
+  else if (symUpper.includes("SOL")) { basePrice = 185; vol = 0.0045; }
+  else if (symUpper.includes("BNB")) { basePrice = 620; vol = 0.0030; }
+  else if (symUpper.includes("XRP")) { basePrice = 0.58; vol = 0.0040; }
+  else if (symUpper.includes("DOGE")) { basePrice = 0.19; vol = 0.0055; }
+  else if (symUpper.includes("SUI")) { basePrice = 2.30; vol = 0.0060; }
+  else if (symUpper.includes("PEPE")) { basePrice = 0.0000105; vol = 0.0070; }
+  else if (symUpper.includes("AVAX")) { basePrice = 32.0; vol = 0.0045; }
+  else if (symUpper.includes("LINK")) { basePrice = 14.50; vol = 0.0040; }
+  else if (symUpper.includes("NEAR")) { basePrice = 5.20; vol = 0.0045; }
 
   const candles: Candle[] = [];
   let price = basePrice;
@@ -231,94 +367,185 @@ function calculateIndicators(candles: Candle[]) {
   return { ema20, ema50, atr14, rvol };
 }
 
-// DeepSeek Solo 100-Point Discrete Rubric & Kill-Switch Auditor
+// DeepSeek Solo 100-Point Discrete Rubric & Kill-Switch Auditor (Calibrated Multi-Asset Engine)
 function auditWithDeepSeekSolo(
   setup: { symbol: string; strategy_name: string; side: "LONG" | "SHORT"; entry: number; sl: number; tp: number; rr: number },
   candle: Candle,
   rvol: number,
   ema50: number,
   h1DealingDepth: number,
-  minScore: number = 70
+  minScore: number = 65
 ): { passed: boolean; totalScore: number; vetoReason: string | null; rubric: Record<string, any>; debate: Record<string, string> } {
-  const { side, strategy_name, rr } = setup;
+  const { side, strategy_name, rr, symbol } = setup;
   const isLong = side === "LONG";
   const date = new Date(candle.timestamp);
   const hour = date.getUTCHours();
   const day = date.getUTCDay();
 
-  // 1. HTF Regime {0, 12, 25}
+  const symUpper = symbol.toUpperCase();
+  const isIndex = ["NAS", "NDX", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"].some(s => symUpper.includes(s));
+  const isCommodity = ["XAU", "GOLD", "XAG", "SILVER", "USOIL", "WTI", "CRUDE"].some(s => symUpper.includes(s));
+  const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF"].some(s => symUpper.includes(s));
+  const isCrypto = !isIndex && !isCommodity && !isForex;
+
+  // 1. HTF Regime {0, 12, 15, 25}
   let htfScore = 12;
   let htfReason = "Neutral structural consolidation; entry near range boundary";
   if (isLong) {
-    if (candle.close > ema50 && h1DealingDepth <= 50) {
-      htfScore = 25;
-      htfReason = "Strong 1D/4H macro alignment with 1H dealing zone in institutional discount (<50%)";
-    } else if (h1DealingDepth > 65) {
-      htfScore = 0;
-      htfReason = "Chasing Long into 1H Premium dealing zone without pullback";
+    if (candle.close > ema50) {
+      if (h1DealingDepth <= 52) {
+        htfScore = 25;
+        htfReason = "Strong 1D/4H macro alignment with 1H dealing zone in institutional discount (<52%)";
+      } else if (h1DealingDepth <= 62) {
+        htfScore = 15;
+        htfReason = "Structural bull trend alignment entering equilibrium continuation breakout";
+      } else if (h1DealingDepth > 72) {
+        htfScore = 0;
+        htfReason = "Chasing Long into extreme 1H Premium dealing zone (>72%) without pullback";
+      }
+    } else {
+      if (h1DealingDepth <= 30) {
+        htfScore = 12;
+        htfReason = "Discount mean-reversion reclaim below 50 EMA";
+      } else {
+        htfScore = 0;
+        htfReason = "Adverse macro trend: price below 50 EMA in upper dealing range";
+      }
     }
   } else {
-    if (candle.close < ema50 && h1DealingDepth >= 50) {
-      htfScore = 25;
-      htfReason = "Strong 1D/4H macro alignment with 1H dealing zone in institutional premium (>50%)";
-    } else if (h1DealingDepth < 35) {
-      htfScore = 0;
-      htfReason = "Chasing Short into 1H Discount dealing zone without pullback";
+    if (candle.close < ema50) {
+      if (h1DealingDepth >= 48) {
+        htfScore = 25;
+        htfReason = "Strong 1D/4H macro alignment with 1H dealing zone in institutional premium (>48%)";
+      } else if (h1DealingDepth >= 38) {
+        htfScore = 15;
+        htfReason = "Structural bear trend alignment entering equilibrium continuation breakdown";
+      } else if (h1DealingDepth < 28) {
+        htfScore = 0;
+        htfReason = "Chasing Short into extreme 1H Discount dealing zone (<28%) without pullback";
+      }
+    } else {
+      if (h1DealingDepth >= 70) {
+        htfScore = 12;
+        htfReason = "Premium mean-reversion rejection above 50 EMA";
+      } else {
+        htfScore = 0;
+        htfReason = "Adverse macro trend: price above 50 EMA in lower dealing range";
+      }
     }
   }
 
-  // 2. LTF Location {0, 12, 25}
+  // 2. LTF Location {0, 12, 15, 25}
   let ltfScore = 12;
   let ltfReason = "Valid strategy location, standard structural trigger";
-  if (["SMC_Liquidity_Sweep", "Asian_Session_Judas_Sweep", "PDH_PDL_Breaker", "Order_Block_FVG_Mitigation"].includes(strategy_name)) {
-    if (rvol >= 1.35) {
+  const isSweepStrat = ["SMC_Liquidity_Sweep", "Asian_Session_Judas_Sweep", "PDH_PDL_Breaker", "Order_Block_FVG_Mitigation"].includes(strategy_name);
+  const sweepDisplacementRvol = (isForex || isIndex) ? 1.18 : 1.30;
+
+  if (isSweepStrat) {
+    if (rvol >= sweepDisplacementRvol) {
       ltfScore = 25;
-      ltfReason = "Verified liquidity sweep of key fractal swing followed by displacement and unmitigated FVG/OB reclaim";
+      ltfReason = `Verified liquidity sweep of key fractal swing with institutional displacement (RVOL ${rvol.toFixed(2)}x)`;
     } else {
-      ltfScore = 12;
-      ltfReason = "Valid sweep trigger at support/resistance with moderate follow-through";
+      ltfScore = 15;
+      ltfReason = "Valid liquidity sweep trigger at key swing with moderate institutional participation";
     }
-  } else if (rvol < 0.95) {
+  } else if (rvol < (isForex || isIndex ? 0.68 : 0.85)) {
     ltfScore = 0;
     ltfReason = "Chasing middle of range without clean sweep or displacement confirmation";
   }
 
-  // 3. Momentum & Volume {0, 7, 15}
+  // 3. Momentum & Volume {0, 7, 10, 15}
   let momScore = 7;
   let momReason = `Moderate relative volume (RVOL ${rvol.toFixed(2)}x) with stable order flow`;
-  if (rvol >= 1.4) {
+  const highDispRvol = (isForex || isIndex) ? 1.20 : 1.35;
+  const goodDispRvol = (isForex || isIndex) ? 0.95 : 1.05;
+  const floorDispRvol = (isForex || isIndex) ? 0.70 : 0.80;
+
+  if (rvol >= highDispRvol) {
     momScore = 15;
     momReason = `High-conviction displacement candle with institutional RVOL ${rvol.toFixed(2)}x`;
-  } else if (rvol < 0.9) {
+  } else if (rvol >= goodDispRvol) {
+    momScore = 10;
+    momReason = `Healthy institutional participation with stable order flow (RVOL ${rvol.toFixed(2)}x)`;
+  } else if (rvol < floorDispRvol) {
     momScore = 0;
-    momReason = `Weak relative volume (RVOL ${rvol.toFixed(2)}x < 1.0), high risk of retail false breakout`;
+    momReason = `Weak relative volume (RVOL ${rvol.toFixed(2)}x < floor), elevated false-breakout risk`;
   }
 
-  // 4. News Catalyst & Session Timing {0, 10, 20}
+  // 4. News Catalyst & Session Timing {0, 5, 10, 15, 20}
   let newsScore = 10;
   let newsReason = `Active session trading window (${hour.toString().padStart(2, "0")}:00 UTC)`;
-  if (day === 5 && hour >= 21) {
+
+  if ((isForex || isIndex) && day === 5 && hour >= 20) {
     newsScore = 0;
-    newsReason = "Friday close rollover liquidity cliff and widened spreads";
-  } else if (hour >= 12 && hour <= 16) {
-    newsScore = 20;
-    newsReason = `Prime London/NY institutional overlap (${hour.toString().padStart(2, "0")}:00 UTC) with peak deep book liquidity`;
-  } else if ((hour >= 7 && hour < 12) || (hour > 16 && hour <= 21)) {
-    newsScore = 10;
-    newsReason = `Regular institutional trading session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    newsReason = "Friday close rollover liquidity cliff and widened broker spreads";
+  } else if (isIndex || symUpper.includes("USOIL")) {
+    // US Indices & Oil peak during NY Equity Cash Session (13:30 - 20:00 UTC)
+    if (hour >= 13 && hour <= 20) {
+      newsScore = 20;
+      newsReason = `Prime New York equity cash session (${hour.toString().padStart(2, "0")}:00 UTC) with deep institutional books`;
+    } else if (hour >= 11 && hour < 13) {
+      newsScore = 15;
+      newsReason = `US Pre-market & London crossover window (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else if (hour >= 7 && hour < 11) {
+      newsScore = 10;
+      newsReason = `European session active (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else {
+      newsScore = 5;
+      newsReason = `Off-hours / futures overnight session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    }
+  } else if (isForex || symUpper.includes("GER40") || symUpper.includes("UK100")) {
+    // European Forex & Indices: London Open & London/NY Overlap
+    if ((hour >= 7 && hour <= 11) || (hour >= 12 && hour <= 16)) {
+      newsScore = 20;
+      newsReason = `Prime London Open & London/NY Overlap (${hour.toString().padStart(2, "0")}:00 UTC) with peak interbank liquidity`;
+    } else if (hour > 16 && hour <= 20) {
+      newsScore = 10;
+      newsReason = `Regular New York afternoon session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else if (strategy_name === "Asian_Session_Judas_Sweep" && hour >= 1 && hour <= 6) {
+      newsScore = 15;
+      newsReason = `Asian session sweep execution window (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else {
+      newsScore = 5;
+      newsReason = `Asian consolidation / off-hours session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    }
+  } else if (symUpper.includes("JPY") || symUpper.includes("NIKKEI")) {
+    // Asian Session pairs
+    if (hour >= 0 && hour <= 7) {
+      newsScore = 15;
+      newsReason = `Active Tokyo / Asian session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else if (hour >= 12 && hour <= 16) {
+      newsScore = 20;
+      newsReason = `London/NY Overlap peak liquidity (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else {
+      newsScore = 10;
+      newsReason = `Intermarket global session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    }
   } else {
-    newsScore = 0;
-    newsReason = `Illiquid off-hours / Asian consolidation window (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    // 24/7 Crypto Futures
+    if (hour >= 12 && hour <= 20) {
+      newsScore = 20;
+      newsReason = `Peak global trading volume window (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else if (hour >= 7 && hour < 12) {
+      newsScore = 15;
+      newsReason = `European session active flow (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    } else {
+      newsScore = 10;
+      newsReason = `Global crypto session (${hour.toString().padStart(2, "0")}:00 UTC)`;
+    }
   }
 
-  // 5. Intermarket Tide {0, 7, 15}
+  // 5. Intermarket Tide {0, 7, 10, 15}
   let tideScore = 7;
   let tideReason = "Neutral benchmark flow with acceptable R:R clearance";
   const trendAlign = isLong ? candle.close > ema50 : candle.close < ema50;
   if (trendAlign && rr >= 2.0) {
     tideScore = 15;
     tideReason = "50 EMA ribbon and structural momentum strongly align with trade direction";
-  } else if (!trendAlign && rr < 1.8) {
+  } else if (trendAlign || rr >= 1.8) {
+    tideScore = 10;
+    tideReason = "Acceptable benchmark momentum and favorable R:R clearance";
+  } else if (!trendAlign && rr < 1.7) {
     tideScore = 0;
     tideReason = "Adverse benchmark momentum opposing proposed direction";
   }
@@ -326,13 +553,14 @@ function auditWithDeepSeekSolo(
   // Binary Kill-Switch Veto Gates
   let veto = false;
   let vetoReason: string | null = null;
+  const rvolFloor = (isForex || isIndex) ? 0.65 : 0.80;
 
   if (rr < 1.5) {
     veto = true;
     vetoReason = `Reward-to-Risk ratio (${rr.toFixed(2)}R) is strictly below 1.5R threshold`;
-  } else if (rvol < 0.8) {
+  } else if (rvol < rvolFloor) {
     veto = true;
-    vetoReason = `RVOL ${rvol.toFixed(2)}x is below institutional liquidity floor (0.80x)`;
+    vetoReason = `RVOL ${rvol.toFixed(2)}x is below institutional liquidity floor (${rvolFloor.toFixed(2)}x)`;
   } else if (htfScore === 0 && ltfScore === 0) {
     veto = true;
     vetoReason = "Severe counter-trend entry into opposing dealing zone without liquidity sweep";
@@ -351,7 +579,7 @@ function auditWithDeepSeekSolo(
 
   const debate = {
     bearish_devils_advocate: `Trade risks stopping out if ${setup.symbol} encounters liquidity exhaustion near entry and volume (${rvol.toFixed(2)}x) fails to sustain expansion.`,
-    bullish_defense: `Institutional edge verified: DeepSeek Score ${totalScore}/100, 1H dealing alignment (${htfScore}/25), and clean ${strategy_name.replace(/_/g, " ")} structure (${ltfScore}/25).`,
+    bullish_defense: `Institutional edge verified: DeepSeek Score ${totalScore}/100 (Threshold ${minScore}), 1H dealing alignment (${htfScore}/25), and clean ${strategy_name.replace(/_/g, " ")} structure (${ltfScore}/25).`,
     execution_notes: `DeepSeek Solo Audit: ${totalScore}/100 (HTF:${htfScore} + LTF:${ltfScore} + Mom:${momScore} + News:${newsScore} + Tide:${tideScore}). Veto=${veto}.`,
   };
 
@@ -367,6 +595,13 @@ export async function POST(request: Request) {
     const initial_capital = parseFloat(body.initial_capital || "100.0");
     const target_rr = parseFloat(body.target_rr || "2.5");
     const ai_provider = (body.ai_provider || "deepseek").toLowerCase();
+
+    const symUpper = symbol.toUpperCase();
+    const isIndex = ["NAS", "NDX", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"].some(s => symUpper.includes(s));
+    const isCommodity = ["XAU", "GOLD", "XAG", "SILVER", "USOIL", "WTI", "CRUDE"].some(s => symUpper.includes(s));
+    const isForex = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF"].some(s => symUpper.includes(s));
+    const defaultScore = (isForex || isIndex) ? 60 : 65;
+    const min_score = parseInt(body.min_score || String(defaultScore), 10);
 
     // 1. Fetch real historical candles
     const candles = await fetchRealCandles(symbol, lookback_days);
@@ -505,7 +740,7 @@ export async function POST(request: Request) {
         let candidate: { strategy_name: string; side: "LONG" | "SHORT"; entry: number; sl: number; tp: number; rr: number } | null = null;
 
         // Strategy 1: SMC Liquidity Sweep & Displacement Reclaim
-        if (c.low < prevC.low && c.close > prevC.open && c.close > curEma50 && curRvol >= 1.25) {
+        if (c.low < prevC.low && c.close > prevC.open && c.close > curEma50 && curRvol >= 1.20) {
           candidate = {
             strategy_name: "SMC_Liquidity_Sweep",
             side: "LONG",
@@ -514,7 +749,7 @@ export async function POST(request: Request) {
             tp: c.close + (c.close - (c.low - curAtr * 0.5)) * target_rr,
             rr: target_rr
           };
-        } else if (c.high > prevC.high && c.close < prevC.open && c.close < curEma50 && curRvol >= 1.25) {
+        } else if (c.high > prevC.high && c.close < prevC.open && c.close < curEma50 && curRvol >= 1.20) {
           candidate = {
             strategy_name: "SMC_Liquidity_Sweep",
             side: "SHORT",
@@ -525,7 +760,7 @@ export async function POST(request: Request) {
           };
         }
         // Strategy 2: Order Block & FVG Mitigation
-        else if (c.close > ema20[i] && prevC.close <= ema20[i - 1] && c.close > curEma50 && curRvol >= 1.1) {
+        else if (c.close > ema20[i] && prevC.close <= ema20[i - 1] && c.close > curEma50 && curRvol >= 1.05) {
           candidate = {
             strategy_name: "Order_Block_FVG_Mitigation",
             side: "LONG",
@@ -534,7 +769,7 @@ export async function POST(request: Request) {
             tp: c.close + curAtr * 1.2 * target_rr,
             rr: target_rr
           };
-        } else if (c.close < ema20[i] && prevC.close >= ema20[i - 1] && c.close < curEma50 && curRvol >= 1.1) {
+        } else if (c.close < ema20[i] && prevC.close >= ema20[i - 1] && c.close < curEma50 && curRvol >= 1.05) {
           candidate = {
             strategy_name: "Order_Block_FVG_Mitigation",
             side: "SHORT",
@@ -545,7 +780,7 @@ export async function POST(request: Request) {
           };
         }
         // Strategy 3: Asian Judas / Session Breaker
-        else if (curRvol >= 1.35) {
+        else if (curRvol >= 1.25) {
           const isBull = c.close > c.open && c.close > curEma50;
           candidate = {
             strategy_name: "Asian_Session_Judas_Sweep",
@@ -572,7 +807,7 @@ export async function POST(request: Request) {
               curRvol,
               curEma50,
               depth,
-              70 // Min score threshold
+              min_score
             );
             passed = auditRes.passed;
             auditScore = auditRes.totalScore;
@@ -702,14 +937,14 @@ export async function POST(request: Request) {
       total_r_accumulated: round(totalR, 2),
       max_drawdown_pct: round(maxDd, 2),
       ai_provider,
-      ai_model: ai_provider === "deepseek" ? "DeepSeek V3 / R1 (Solo Institutional Engine)" : "Raw Technical Strategy (No AI)",
+      ai_model: ai_provider === "deepseek" ? `DeepSeek V3 / R1 (Solo Rubric Engine, Min ${min_score})` : "Raw Technical Strategy (No AI)",
       ai_audit_stats: {
         total_signals_detected: totalSignalsDetected,
         approved_trades: aiApprovedTrades,
         vetoed_trades: aiVetoedTrades,
         pass_rate_pct: passRate,
         average_score: avgScore,
-        min_score_threshold: 70
+        min_score_threshold: min_score
       },
       strategies: stratStats,
       monthly_performance: monthlyPerf,
@@ -719,9 +954,10 @@ export async function POST(request: Request) {
 
     // Save to Supabase backtest_runs table
     try {
+      const exchangeName = isIndex ? "yahoo" : (isForex || isCommodity ? "bybit/yahoo" : "binance");
       await supabase.from("backtest_runs").insert({
         symbol: report.symbol,
-        exchange: ["EUR", "GBP", "JPY", "XAU", "XAG"].some(f => report.symbol.includes(f)) ? "bybit" : "binance",
+        exchange: exchangeName,
         timeframe: "15m",
         lookback_days: report.lookback_days,
         initial_capital: report.initial_capital,

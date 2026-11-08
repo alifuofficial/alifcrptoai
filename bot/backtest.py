@@ -100,6 +100,9 @@ def audit_candidate_setup_deepseek(
     curr_bar = curr_slice.iloc[-1]
     curr_close = float(curr_bar["close"])
     curr_time = pd.to_datetime(curr_bar["timestamp"])
+    sym_upper = str(setup.get("symbol", "")).upper()
+    is_index = any(s in sym_upper for s in ["NAS", "NDX", "SPX", "US30", "DJI", "GER40", "DAX", "UK100", "FTSE", "NIKKEI", "JP225"])
+    is_forex = any(f in sym_upper for f in ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"])
 
     # 1. RVOL calculation
     if "rvol" in curr_slice.columns and pd.notnull(curr_bar.get("rvol")):
@@ -121,11 +124,14 @@ def audit_candidate_setup_deepseek(
     has_benchmarks = daily_b.get("has_benchmarks", False) or asian_b.get("is_valid_range", False)
     has_smt = top_down_context.get("smt_divergence", {}).get("has_smt", False)
 
-    # Pillar 1: HTF Regime {0, 12, 25}
+    # Pillar 1: HTF Regime {0, 12, 15, 25}
     if side == "LONG":
-        if (daily_bias == "BULLISH" or h4_bias == "BULLISH") and (h1_zone == "DISCOUNT" or is_ote or depth <= 50.0):
+        if (daily_bias == "BULLISH" or h4_bias == "BULLISH") and (h1_zone == "DISCOUNT" or is_ote or depth <= 52.0):
             htf_score = 25
-            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional discount"
+            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional discount (<52%)"
+        elif (daily_bias == "BULLISH" or h4_bias == "BULLISH") and depth <= 62.0:
+            htf_score = 15
+            htf_reason = "1D/4H bull alignment entering equilibrium continuation breakout"
         elif (daily_bias != "BEARISH" and h4_bias != "BEARISH") or depth <= 55.0:
             htf_score = 12
             htf_reason = "4H/1D in neutral consolidation; entry at range boundary toward mean"
@@ -133,9 +139,12 @@ def audit_candidate_setup_deepseek(
             htf_score = 0
             htf_reason = "Counter-trend against prevailing 4H/1D impulse or chasing Long into 1H Premium"
     else:
-        if (daily_bias == "BEARISH" or h4_bias == "BEARISH") and (h1_zone == "PREMIUM" or is_ote or depth >= 50.0):
+        if (daily_bias == "BEARISH" or h4_bias == "BEARISH") and (h1_zone == "PREMIUM" or is_ote or depth >= 48.0):
             htf_score = 25
-            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional premium"
+            htf_reason = "1D/4H macro trend alignment with 1H dealing zone in institutional premium (>48%)"
+        elif (daily_bias == "BEARISH" or h4_bias == "BEARISH") and depth >= 38.0:
+            htf_score = 15
+            htf_reason = "1D/4H bear alignment entering equilibrium continuation breakdown"
         elif (daily_bias != "BULLISH" and h4_bias != "BULLISH") or depth >= 45.0:
             htf_score = 12
             htf_reason = "4H/1D in neutral consolidation; entry at range boundary toward mean"
@@ -143,66 +152,120 @@ def audit_candidate_setup_deepseek(
             htf_score = 0
             htf_reason = "Counter-trend against prevailing 4H/1D impulse or chasing Short into 1H Discount"
 
-    # Pillar 2: LTF Location {0, 12, 25}
-    if strat in ["SMC_Liquidity_Sweep", "Asian_Session_Judas_Sweep", "PDH_PDL_Breaker", "Order_Block_FVG_Mitigation"] and (has_benchmarks or rvol >= 1.3):
+    # Pillar 2: LTF Location {0, 12, 15, 25}
+    sweep_rvol_floor = 1.18 if (is_forex or is_index) else 1.30
+    if strat in ["SMC_Liquidity_Sweep", "Asian_Session_Judas_Sweep", "PDH_PDL_Breaker", "Order_Block_FVG_Mitigation"] and (has_benchmarks or rvol >= sweep_rvol_floor):
         ltf_score = 25
-        ltf_reason = "Pristine sweep of institutional liquidity high/low followed by displacement and unmitigated FVG/OB reclaim"
-    elif strat in ["Turtle_Soup_Reversal", "Break_and_Retest", "Liquidity_Pool_Sweep"] or rvol >= 1.05:
+        ltf_reason = f"Pristine sweep of institutional liquidity high/low followed by displacement (RVOL {rvol:.2f}x) and unmitigated FVG/OB reclaim"
+    elif strat in ["Turtle_Soup_Reversal", "Break_and_Retest", "Liquidity_Pool_Sweep"] or rvol >= (1.0 if (is_forex or is_index) else 1.05):
         ltf_score = 12
-        ltf_reason = "Valid structural strategy trigger at key zone, but sweep was shallow"
-    else:
+        ltf_reason = "Valid structural strategy trigger at key zone with standard participation"
+    elif rvol < (0.68 if (is_forex or is_index) else 0.85):
         ltf_score = 0
         ltf_reason = "Chasing extended price in the middle of a range without clean liquidity sweep"
+    else:
+        ltf_score = 12
+        ltf_reason = "Valid structural trigger near range boundary"
 
-    # Pillar 3: Momentum & Volume {0, 7, 15}
-    if rvol >= 1.4:
+    # Pillar 3: Momentum & Volume {0, 7, 10, 15}
+    high_disp_rvol = 1.20 if (is_forex or is_index) else 1.35
+    good_disp_rvol = 0.95 if (is_forex or is_index) else 1.05
+    floor_disp_rvol = 0.70 if (is_forex or is_index) else 0.80
+
+    if rvol >= high_disp_rvol:
         mom_score = 15
         mom_reason = f"High-conviction displacement with institutional RVOL {rvol:.2f}x"
-    elif rvol >= 1.0:
+    elif rvol >= good_disp_rvol:
+        mom_score = 10
+        mom_reason = f"Healthy institutional participation with stable order flow (RVOL {rvol:.2f}x)"
+    elif rvol >= floor_disp_rvol:
         mom_score = 7
-        mom_reason = f"Moderate relative volume (RVOL {rvol:.2f}x) with stable order flow"
+        mom_reason = f"Moderate relative volume (RVOL {rvol:.2f}x) with acceptable execution flow"
     else:
         mom_score = 0
-        mom_reason = f"Weak relative volume (RVOL {rvol:.2f}x < 1.0), high risk of retail false breakout"
+        mom_reason = f"Weak relative volume (RVOL {rvol:.2f}x < floor), high risk of retail false breakout"
 
-    # Pillar 4: News Catalyst & Session Context {0, 10, 20}
+    # Pillar 4: News Catalyst & Session Context {0, 5, 10, 15, 20}
     hour = curr_time.hour
     weekday = curr_time.weekday()
-    if weekday == 4 and hour >= 21:
+    if (is_forex or is_index) and weekday == 4 and hour >= 20:
         news_score = 0
         news_reason = "Illiquid Friday close rollover with widened broker spreads"
-    elif 12 <= hour <= 16:
-        news_score = 20
-        news_reason = f"Peak London/NY institutional session overlap ({hour:02d}:00 UTC) with deep liquidity books"
-    elif (7 <= hour <= 12) or (16 <= hour <= 21):
-        news_score = 10
-        news_reason = f"Active session trading window ({hour:02d}:00 UTC) clear of economic rollover"
+    elif is_index or "USOIL" in sym_upper:
+        if 13 <= hour <= 20:
+            news_score = 20
+            news_reason = f"Peak New York equity cash session ({hour:02d}:00 UTC) with deep institutional books"
+        elif 11 <= hour < 13:
+            news_score = 15
+            news_reason = f"US pre-market & European crossover window ({hour:02d}:00 UTC)"
+        elif 7 <= hour < 11:
+            news_score = 10
+            news_reason = f"European session active ({hour:02d}:00 UTC)"
+        else:
+            news_score = 5
+            news_reason = f"Futures overnight off-hours session ({hour:02d}:00 UTC)"
+    elif is_forex or any(s in sym_upper for s in ["GER40", "UK100"]):
+        if (7 <= hour <= 11) or (12 <= hour <= 16):
+            news_score = 20
+            news_reason = f"Prime London Open & London/NY Overlap ({hour:02d}:00 UTC) with peak interbank liquidity"
+        elif 16 < hour <= 20:
+            news_score = 10
+            news_reason = f"Regular New York afternoon session ({hour:02d}:00 UTC)"
+        elif strat == "Asian_Session_Judas_Sweep" and 1 <= hour <= 6:
+            news_score = 15
+            news_reason = f"Asian session sweep execution window ({hour:02d}:00 UTC)"
+        else:
+            news_score = 5
+            news_reason = f"Asian consolidation / off-hours session ({hour:02d}:00 UTC)"
+    elif any(s in sym_upper for s in ["JPY", "NIKKEI"]):
+        if 0 <= hour <= 7:
+            news_score = 15
+            news_reason = f"Active Tokyo / Asian session ({hour:02d}:00 UTC)"
+        elif 12 <= hour <= 16:
+            news_score = 20
+            news_reason = f"London/NY Overlap peak liquidity ({hour:02d}:00 UTC)"
+        else:
+            news_score = 10
+            news_reason = f"Intermarket global session ({hour:02d}:00 UTC)"
     else:
-        news_score = 0
-        news_reason = f"Asian consolidation / off-hours session ({hour:02d}:00 UTC) prone to low-volume stop hunts"
+        # Crypto Futures 24/7
+        if 12 <= hour <= 20:
+            news_score = 20
+            news_reason = f"Peak global trading volume window ({hour:02d}:00 UTC)"
+        elif 7 <= hour < 12:
+            news_score = 15
+            news_reason = f"European active session flow ({hour:02d}:00 UTC)"
+        else:
+            news_score = 10
+            news_reason = f"Global crypto session ({hour:02d}:00 UTC)"
 
-    # Pillar 5: Intermarket Tide {0, 7, 15}
+    # Pillar 5: Intermarket Tide {0, 7, 10, 15}
     ema_50 = float(curr_bar.get("ema_50", curr_close))
     ema_align = (curr_close > ema_50) if side == "LONG" else (curr_close < ema_50)
     if has_smt or (ema_align and rr >= 2.0):
         tide_score = 15
         tide_reason = "Cross-pair SMT divergence and 50 EMA ribbon strongly support trade direction"
     elif ema_align or rr >= 1.8:
+        tide_score = 10
+        tide_reason = "Acceptable benchmark momentum and favorable R:R clearance"
+    elif not ema_align and rr < 1.7:
+        tide_score = 0
+        tide_reason = "Adverse benchmark momentum or EMA ribbon directly opposing trade direction"
+    else:
         tide_score = 7
         tide_reason = "Neutral benchmark flow with acceptable R:R clearance"
-    else:
-        tide_score = 0
-        tide_reason = "Benchmark momentum or EMA ribbon directly opposing trade direction"
 
     # Kill-Switch Binary Veto Gates
     veto = False
     veto_reason = None
+    rvol_floor = 0.65 if (is_forex or is_index) else 0.80
+
     if rr < min(1.5, target_rr * 0.75):
         veto = True
-        veto_reason = f"Reward-to-Risk ratio ({rr:.2f}R) is below minimum threshold"
-    elif rvol < 0.80:
+        veto_reason = f"Reward-to-Risk ratio ({rr:.2f}R) is below minimum threshold (1.5R)"
+    elif rvol < rvol_floor:
         veto = True
-        veto_reason = f"RVOL {rvol:.2f}x is below institutional liquidity floor (0.80x)"
+        veto_reason = f"RVOL {rvol:.2f}x is below institutional liquidity floor ({rvol_floor:.2f}x)"
     elif htf_score == 0 and ltf_score == 0:
         veto = True
         veto_reason = "Severe counter-trend entry into opposing premium/discount without liquidity sweep"
