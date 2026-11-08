@@ -43,6 +43,8 @@ export async function GET() {
       deepseek_key_override: maskKey(cfg.deepseek_key_override),
       gemini_api_key_override: maskKey(cfg.gemini_api_key_override),
       qwen_api_key_override: maskKey(cfg.qwen_api_key_override),
+      openai_api_key_override: maskKey(cfg.openai_api_key_override),
+      grok_api_key_override: maskKey(cfg.grok_api_key_override),
       telegram_token_override: maskKey(cfg.telegram_token_override),
     });
 
@@ -113,6 +115,14 @@ export async function GET() {
       qwen_api_key_override: null,
       qwen_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       qwen_model: "qwen3.7-flash",
+      openai_api_key_override: null,
+      openai_model: "gpt-4o-mini",
+      openai_base_url: "https://api.openai.com/v1",
+      grok_api_key_override: null,
+      grok_model: "grok-beta",
+      grok_base_url: "https://api.x.ai/v1",
+      council_chartist_provider: "openai",
+      council_quant_provider: "grok",
       exchange_mode: "binance",
       bybit_api_key_override: null,
       bybit_secret_override: null,
@@ -183,6 +193,8 @@ export async function POST(req: Request) {
       "deepseek_key_override",
       "gemini_api_key_override",
       "qwen_api_key_override",
+      "openai_api_key_override",
+      "grok_api_key_override",
       "telegram_token_override",
     ];
     for (const key of secretKeys) {
@@ -234,6 +246,8 @@ export async function POST(req: Request) {
       deepseek_key_override: maskKey(saved.deepseek_key_override),
       gemini_api_key_override: maskKey(saved.gemini_api_key_override),
       qwen_api_key_override: maskKey(saved.qwen_api_key_override),
+      openai_api_key_override: maskKey(saved.openai_api_key_override),
+      grok_api_key_override: maskKey(saved.grok_api_key_override),
       telegram_token_override: maskKey(saved.telegram_token_override),
     };
 

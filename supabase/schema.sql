@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS bot_config (
     qwen_api_key_override TEXT DEFAULT NULL,
     qwen_base_url TEXT DEFAULT 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     qwen_model TEXT DEFAULT 'qwen3.7-flash',
+    openai_api_key_override TEXT DEFAULT NULL,
+    openai_model TEXT DEFAULT 'gpt-4o-mini',
+    openai_base_url TEXT DEFAULT 'https://api.openai.com/v1',
+    grok_api_key_override TEXT DEFAULT NULL,
+    grok_model TEXT DEFAULT 'grok-beta',
+    grok_base_url TEXT DEFAULT 'https://api.x.ai/v1',
+    council_chartist_provider TEXT NOT NULL DEFAULT 'openai',
+    council_quant_provider TEXT NOT NULL DEFAULT 'grok',
     target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5,
     telegram_token_override TEXT DEFAULT NULL,
     telegram_chat_id_override TEXT DEFAULT NULL,
@@ -461,6 +469,14 @@ BEGIN
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_api_key_override TEXT DEFAULT NULL;
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_base_url TEXT DEFAULT 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS qwen_model TEXT DEFAULT 'qwen3.7-flash';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS openai_api_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS openai_model TEXT DEFAULT 'gpt-4o-mini';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS openai_base_url TEXT DEFAULT 'https://api.openai.com/v1';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS grok_api_key_override TEXT DEFAULT NULL;
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS grok_model TEXT DEFAULT 'grok-beta';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS grok_base_url TEXT DEFAULT 'https://api.x.ai/v1';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS council_chartist_provider TEXT DEFAULT 'openai';
+    ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS council_quant_provider TEXT DEFAULT 'grok';
     ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS target_rr NUMERIC(4, 2) NOT NULL DEFAULT 2.5;
     ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'deepseek-chat';
     ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS gemini_report JSONB DEFAULT '{}'::JSONB;

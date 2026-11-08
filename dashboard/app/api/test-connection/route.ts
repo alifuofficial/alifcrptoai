@@ -41,6 +41,18 @@ interface QwenTestOptions {
   model?: string;
 }
 
+interface OpenAITestOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+interface GrokTestOptions {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
 interface TelegramTestOptions {
   token?: string;
   chatId?: string;
@@ -737,6 +749,204 @@ async function testQwen(options?: QwenTestOptions) {
   }
 }
 
+async function testOpenAI(options?: OpenAITestOptions) {
+  const start = Date.now();
+  let apiKey = options?.apiKey?.trim();
+  let baseUrl = options?.baseUrl?.trim() || "https://api.openai.com/v1";
+  let model = options?.model?.trim() || "gpt-4o-mini";
+
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+
+  if (!apiKey) {
+    try {
+      const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfg) {
+        apiKey = cfg.openai_api_key_override || process.env.OPENAI_API_KEY;
+        if (cfg.openai_base_url) baseUrl = cfg.openai_base_url;
+        if (cfg.openai_model) model = cfg.openai_model;
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  if (!apiKey) {
+    return {
+      success: false,
+      service: "openai",
+      message: "No OpenAI API Key provided. Enter your sk-... key from platform.openai.com.",
+      configured: false,
+      latencyMs: 0,
+      model,
+      baseUrl,
+    };
+  }
+
+  let endpoint = baseUrl.replace(/\/+$/, "");
+  if (!endpoint.endsWith("/chat/completions")) {
+    endpoint = `${endpoint}/chat/completions`;
+  }
+
+  try {
+    const aiRes = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a quantitative trading auditor ping test." },
+          { role: "user", content: "Reply with the single word: READY" },
+        ],
+        max_tokens: 15,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const latencyMs = Date.now() - start;
+    const aiData = await aiRes.json();
+
+    if (!aiRes.ok) {
+      const errMsg = aiData?.error?.message || aiData?.message || `HTTP ${aiRes.status}`;
+      return {
+        success: false,
+        service: "openai",
+        message: `OpenAI Endpoint Error (${aiRes.status}): ${errMsg}`,
+        latencyMs,
+        model,
+        baseUrl,
+        configured: true,
+      };
+    }
+
+    const reply = aiData.choices?.[0]?.message?.content?.trim() || "READY";
+
+    return {
+      success: true,
+      service: "openai",
+      message: `OpenAI Chartist Connected! Model '${model}' responded "${reply}" (${latencyMs}ms)`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+      reply,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    return {
+      success: false,
+      service: "openai",
+      message: `OpenAI Endpoint Unreachable: ${err.message}`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+    };
+  }
+}
+
+async function testGrok(options?: GrokTestOptions) {
+  const start = Date.now();
+  let apiKey = options?.apiKey?.trim();
+  let baseUrl = options?.baseUrl?.trim() || "https://api.x.ai/v1";
+  let model = options?.model?.trim() || "grok-beta";
+
+  if (apiKey && (apiKey.includes("••••") || apiKey.includes("****"))) apiKey = undefined;
+
+  if (!apiKey) {
+    try {
+      const { data: cfg } = await supabase.from("bot_config").select("*").eq("id", 1).maybeSingle();
+      if (cfg) {
+        apiKey = cfg.grok_api_key_override || process.env.GROK_API_KEY || process.env.XAI_API_KEY;
+        if (cfg.grok_base_url) baseUrl = cfg.grok_base_url;
+        if (cfg.grok_model) model = cfg.grok_model;
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  if (!apiKey) {
+    return {
+      success: false,
+      service: "grok",
+      message: "No Grok API Key provided. Enter your xai-... key from console.x.ai.",
+      configured: false,
+      latencyMs: 0,
+      model,
+      baseUrl,
+    };
+  }
+
+  let endpoint = baseUrl.replace(/\/+$/, "");
+  if (!endpoint.endsWith("/chat/completions")) {
+    endpoint = `${endpoint}/chat/completions`;
+  }
+
+  try {
+    const aiRes = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a quantitative trading auditor ping test." },
+          { role: "user", content: "Reply with the single word: READY" },
+        ],
+        max_tokens: 15,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const latencyMs = Date.now() - start;
+    const aiData = await aiRes.json();
+
+    if (!aiRes.ok) {
+      const errMsg = aiData?.error?.message || aiData?.message || `HTTP ${aiRes.status}`;
+      return {
+        success: false,
+        service: "grok",
+        message: `Grok Endpoint Error (${aiRes.status}): ${errMsg}`,
+        latencyMs,
+        model,
+        baseUrl,
+        configured: true,
+      };
+    }
+
+    const reply = aiData.choices?.[0]?.message?.content?.trim() || "READY";
+
+    return {
+      success: true,
+      service: "grok",
+      message: `Grok Quant Connected! Model '${model}' responded "${reply}" (${latencyMs}ms)`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+      reply,
+    };
+  } catch (err: any) {
+    const latencyMs = Date.now() - start;
+    return {
+      success: false,
+      service: "grok",
+      message: `Grok Endpoint Unreachable: ${err.message}`,
+      latencyMs,
+      model,
+      baseUrl,
+      configured: true,
+    };
+  }
+}
+
 async function testTelegram(options?: TelegramTestOptions) {
   const start = Date.now();
   let token = options?.token?.trim();
@@ -908,6 +1118,16 @@ export async function POST(req: Request) {
       return NextResponse.json(result);
     }
 
+    if (service === "openai") {
+      const result = await testOpenAI(params.openai);
+      return NextResponse.json(result);
+    }
+
+    if (service === "grok" || service === "xai") {
+      const result = await testGrok(params.grok || params.xai);
+      return NextResponse.json(result);
+    }
+
     if (service === "telegram") {
       const result = await testTelegram(params.telegram);
       return NextResponse.json(result);
@@ -919,17 +1139,20 @@ export async function POST(req: Request) {
     }
 
     // Default: Test all services
-    const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, telegramRes, dbRes] = await Promise.all([
+    const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, openaiRes, grokRes, telegramRes, dbRes] = await Promise.all([
       testBinance(params.binance),
       testBybit(params.bybit),
       testDeepSeek(params.deepseek),
       testGemini(params.gemini),
       testQwen(params.qwen),
+      testOpenAI(params.openai),
+      testGrok(params.grok),
       testTelegram(params.telegram),
       testDatabase(),
     ]);
 
-    const allSuccessful = binanceRes.success && (deepseekRes.success || geminiRes.success || qwenRes.success) && telegramRes.success && dbRes.success;
+    const anyAiSuccessful = deepseekRes.success || geminiRes.success || qwenRes.success || openaiRes.success || grokRes.success;
+    const allSuccessful = binanceRes.success && anyAiSuccessful && telegramRes.success && dbRes.success;
 
     return NextResponse.json({
       success: allSuccessful,
@@ -940,6 +1163,8 @@ export async function POST(req: Request) {
         deepseek: deepseekRes,
         gemini: geminiRes,
         qwen: qwenRes,
+        openai: openaiRes,
+        grok: grokRes,
         telegram: telegramRes,
         database: dbRes,
       },
@@ -956,18 +1181,21 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, telegramRes, dbRes] = await Promise.all([
+  const [binanceRes, bybitRes, deepseekRes, geminiRes, qwenRes, openaiRes, grokRes, telegramRes, dbRes] = await Promise.all([
     testBinance(),
     testBybit(),
     testDeepSeek(),
     testGemini(),
     testQwen(),
+    testOpenAI(),
+    testGrok(),
     testTelegram(),
     testDatabase(),
   ]);
 
+  const anyAiSuccessful = deepseekRes.success || geminiRes.success || qwenRes.success || openaiRes.success || grokRes.success;
   return NextResponse.json({
-    success: binanceRes.success && (deepseekRes.success || geminiRes.success || qwenRes.success) && telegramRes.success && dbRes.success,
+    success: binanceRes.success && anyAiSuccessful && telegramRes.success && dbRes.success,
     service: "all",
     results: {
       binance: binanceRes,
@@ -975,6 +1203,8 @@ export async function GET() {
       deepseek: deepseekRes,
       gemini: geminiRes,
       qwen: qwenRes,
+      openai: openaiRes,
+      grok: grokRes,
       telegram: telegramRes,
       database: dbRes,
     },

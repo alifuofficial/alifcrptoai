@@ -443,11 +443,34 @@ def get_bybit_client(cfg: Dict[str, Any]) -> ccxt.bybit:
 
 def get_ai_client(provider: str, cfg: Dict[str, Any]) -> Tuple[OpenAI, str]:
     """
-    Returns an OpenAI-compatible client configured for the selected provider ('deepseek', 'gemini', or 'qwen'),
+    Returns an OpenAI-compatible client configured for the selected provider:
+    - 'openai':   OpenAI official API (e.g. gpt-4o-mini, gpt-4o)
+    - 'grok'/'xai': xAI official API (e.g. grok-beta, grok-2-latest)
+    - 'gemini':   Google Gemini official OpenAI-compatible endpoint
+    - 'qwen':     Alibaba DashScope OpenAI-compatible endpoint
+    - 'deepseek': DeepSeek official API (default)
     along with the resolved model name.
     """
     prov = str(provider).strip().lower()
-    if prov == "gemini":
+    if prov == "openai":
+        openai_key = cfg.get("openai_api_key_override") or os.getenv("OPENAI_API_KEY", "")
+        openai_base_url = cfg.get("openai_base_url") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        openai_model = cfg.get("openai_model") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        client = OpenAI(
+            api_key=openai_key or "sk-dummy-openai-key",
+            base_url=openai_base_url
+        )
+        return client, openai_model
+    elif prov in ["grok", "xai"]:
+        grok_key = cfg.get("grok_api_key_override") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "")
+        grok_base_url = cfg.get("grok_base_url") or os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
+        grok_model = cfg.get("grok_model") or os.getenv("GROK_MODEL", "grok-beta")
+        client = OpenAI(
+            api_key=grok_key or "xai-dummy-grok-key",
+            base_url=grok_base_url
+        )
+        return client, grok_model
+    elif prov == "gemini":
         gemini_key = cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY", "")
         gemini_model = cfg.get("gemini_model") or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
         # Auto-upgrade deprecated / retired model identifiers
@@ -573,6 +596,32 @@ def execute_ai_completion(
                     return (resp.choices[0].message.content or "{}"), "gemini-3.5-flash"
                 raise gem_err
 
+    elif provider == "openai":
+        client, model = get_ai_client("openai", cfg)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=max_tokens
+        )
+        return (resp.choices[0].message.content or "{}"), model
+
+    elif provider in ["grok", "xai"]:
+        client, model = get_ai_client("grok", cfg)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=max_tokens
+        )
+        return (resp.choices[0].message.content or "{}"), model
+
     elif provider == "qwen":
         client, model = get_ai_client("qwen", cfg)
         resp = client.chat.completions.create(
@@ -650,6 +699,14 @@ def fetch_bot_config(supabase: Client) -> Dict[str, Any]:
         "qwen_api_key_override": None,
         "qwen_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "qwen_model": "qwen3.7-flash",
+        "openai_api_key_override": None,
+        "openai_model": "gpt-4o-mini",
+        "openai_base_url": "https://api.openai.com/v1",
+        "grok_api_key_override": None,
+        "grok_model": "grok-beta",
+        "grok_base_url": "https://api.x.ai/v1",
+        "council_chartist_provider": "openai",
+        "council_quant_provider": "grok",
         "exchange_mode": "binance",
         "bybit_api_key_override": None,
         "bybit_secret_override": None,
@@ -1052,18 +1109,18 @@ def verify_and_score_council(
 
     veto_reason = None
     if gemini_veto:
-        veto_reason = f"Gemini Chartist Veto: {gemini_rep.get('chart_verdict', 'Opposing market structure wall')}"
+        veto_reason = f"Chartist Veto: {gemini_rep.get('chart_verdict', 'Opposing market structure wall')}"
     elif qwen_veto:
-        veto_reason = f"Qwen Quant/Macro Veto: {qwen_rep.get('quant_summary', 'Macro blackout or funding crowding')}"
+        veto_reason = f"Quant/Macro Veto: {qwen_rep.get('quant_summary', 'Macro blackout or funding crowding')}"
     elif ds_veto:
         veto_reason = ds_kill.get("veto_reason") or deepseek_rep.get("veto_reason") or "DeepSeek Chief Judge Veto Triggered"
 
-    # Clamping Gemini Scores (Max 40)
+    # Clamping Chartist / Gemini Scores (Max 40)
     htf_score = clamp_discrete(gemini_rep.get("htf_regime", {}).get("score"), [0, 10, 20], 10)
     ltf_score = clamp_discrete(gemini_rep.get("ltf_location", {}).get("score"), [0, 10, 20], 10)
     gemini_total = htf_score + ltf_score
 
-    # Clamping Qwen Scores (Max 30)
+    # Clamping Quant / Qwen Scores (Max 30)
     mom_score = clamp_discrete(qwen_rep.get("momentum_volume", {}).get("score"), [0, 5, 10], 5)
     news_score = clamp_discrete(qwen_rep.get("news_catalyst", {}).get("score"), [0, 5, 10], 5)
     tide_score = clamp_discrete(qwen_rep.get("intermarket_tide", {}).get("score"), [0, 5, 10], 5)
@@ -1114,9 +1171,11 @@ def verify_and_score_council(
     }
 
     council_scores = {
+        "chartist": gemini_total,
+        "quant": qwen_total,
+        "deepseek": deepseek_total,
         "gemini": gemini_total,
         "qwen": qwen_total,
-        "deepseek": deepseek_total,
         "total": total_score
     }
 
@@ -1134,20 +1193,38 @@ def execute_council_audit(
     session_info: Optional[Dict[str, Any]]
 ) -> Tuple[int, bool, Optional[str], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, int], str]:
     """
-    Executes the 3-Model AI Council consensus audit:
-    - Stage 1: Parallel dispatch to Gemini Chartist (40 pts) & Qwen Quant/Macro (30 pts) via ThreadPoolExecutor.
+    Executes the Pluggable 3-Model AI Council consensus audit:
+    - Stage 1: Parallel dispatch to Chartist Engine (OpenAI or Gemini, 40 pts) 
+               & Quant/Macro Engine (Grok or Qwen, 30 pts) via ThreadPoolExecutor.
     - Stage 2: DeepSeek Chief Risk Officer (30 pts) synthesizes both specialist reports, runs adversarial debate,
                enforces kill-switches, and computes final consensus.
     Returns:
-    (total_score, veto_triggered, veto_reason, rubric_breakdown, gemini_rep, qwen_rep, deepseek_rep, council_scores, primary_model)
+    (total_score, veto_triggered, veto_reason, rubric_breakdown, chartist_rep, quant_rep, deepseek_rep, council_scores, primary_model)
     """
     symbol = candidate_setup["symbol"]
     side = candidate_setup["side"]
     strat_name = candidate_setup["strategy_name"]
 
-    # 1. Gemini Chartist Payload
-    def _run_gemini() -> Tuple[Dict[str, Any], str]:
-        gemini_user_payload = {
+    # Resolve Pluggable Providers with Auto-Fallback
+    chartist_prov = str(cfg.get("council_chartist_provider") or "openai").strip().lower()
+    has_openai_key = bool(cfg.get("openai_api_key_override") or os.getenv("OPENAI_API_KEY"))
+    has_gemini_key = bool(cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY"))
+    if chartist_prov == "openai" and not has_openai_key and has_gemini_key:
+        chartist_prov = "gemini"
+    elif chartist_prov == "gemini" and not has_gemini_key and has_openai_key:
+        chartist_prov = "openai"
+
+    quant_prov = str(cfg.get("council_quant_provider") or "grok").strip().lower()
+    has_grok_key = bool(cfg.get("grok_api_key_override") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY"))
+    has_qwen_key = bool(cfg.get("qwen_api_key_override") or os.getenv("QWEN_API_KEY"))
+    if quant_prov in ["grok", "xai"] and not has_grok_key and has_qwen_key:
+        quant_prov = "qwen"
+    elif quant_prov == "qwen" and not has_qwen_key and has_grok_key:
+        quant_prov = "grok"
+
+    # 1. Chartist Payload (OpenAI or Gemini)
+    def _run_chartist() -> Tuple[Dict[str, Any], str]:
+        chartist_user_payload = {
             "symbol": symbol,
             "direction": side,
             "strategy_name": strat_name,
@@ -1175,29 +1252,47 @@ def execute_council_audit(
             "local_liquidity_pools_15m": top_down_context.get("ltf_15m"),
             "setup_notes": candidate_setup.get("setup_notes")
         }
+        
+        # Try primary chosen chartist provider
         try:
             content, model = execute_ai_completion(
-                {**cfg, "ai_provider": "gemini"},
+                {**cfg, "ai_provider": chartist_prov},
                 system_prompt=GEMINI_CHARTIST_SYSTEM_PROMPT,
-                user_prompt=json.dumps(gemini_user_payload, indent=2),
+                user_prompt=json.dumps(chartist_user_payload, indent=2),
                 max_tokens=600
             )
             return parse_ai_json(content), model
         except Exception as e:
-            print(f"[council] Gemini Chartist warning: {e}")
+            print(f"[council] Primary Chartist ({chartist_prov}) warning: {e}")
+            # Try alternate provider if configured
+            alt_prov = "gemini" if chartist_prov == "openai" else "openai"
+            alt_key = (cfg.get("gemini_api_key_override") or os.getenv("GEMINI_API_KEY")) if alt_prov == "gemini" else (cfg.get("openai_api_key_override") or os.getenv("OPENAI_API_KEY"))
+            if alt_key:
+                try:
+                    print(f"[council] Auto-falling back to alternate Chartist ({alt_prov})...")
+                    content, model = execute_ai_completion(
+                        {**cfg, "ai_provider": alt_prov},
+                        system_prompt=GEMINI_CHARTIST_SYSTEM_PROMPT,
+                        user_prompt=json.dumps(chartist_user_payload, indent=2),
+                        max_tokens=600
+                    )
+                    return parse_ai_json(content), f"{model} (alt-fallback)"
+                except Exception as alt_err:
+                    print(f"[council] Alternate Chartist ({alt_prov}) error: {alt_err}")
+            
             return {
                 "htf_bias": "RANGING",
-                "htf_regime": {"flaw_or_deduction": f"Gemini fallback: {e}", "score": 10},
+                "htf_regime": {"flaw_or_deduction": f"Chartist fallback: {e}", "score": 10},
                 "ltf_location": {"flaw_or_deduction": "Default location score", "score": 10},
                 "chart_veto": False,
-                "chart_verdict": f"Gemini connection fallback: {e}"
-            }, "gemini-fallback"
+                "chart_verdict": f"Chartist connection fallback: {e}"
+            }, f"{chartist_prov}-fallback"
 
-    # 2. Qwen Quant & Macro Payload
-    def _run_qwen() -> Tuple[Dict[str, Any], str]:
-        has_qwen_key = bool(cfg.get("qwen_api_key_override") or os.getenv("QWEN_API_KEY"))
-        if not has_qwen_key:
-            # Deterministic fallback when Qwen API key is not yet configured in Admin Settings
+    # 2. Quant & Macro Payload (Grok or Qwen)
+    def _run_quant() -> Tuple[Dict[str, Any], str]:
+        has_quant_key = bool(has_grok_key or has_qwen_key)
+        if not has_quant_key:
+            # Deterministic fallback when neither Grok nor Qwen API key is configured
             rvol = float(market_snapshot.get("rvol", 1.0) or 1.0)
             funding = float(market_snapshot.get("funding_rate", 0.0) or 0.0)
             is_blackout = bool(macro_status.get("in_blackout", False)) if isinstance(macro_status, dict) else False
@@ -1218,10 +1313,10 @@ def execute_council_audit(
                     "score": tide_pts
                 },
                 "macro_or_funding_veto": is_blackout,
-                "quant_summary": "Deterministic quantitative metrics applied (Qwen API key unconfigured)."
+                "quant_summary": "Deterministic quantitative metrics applied (Quant API key unconfigured)."
             }, "deterministic-quant-fallback"
 
-        qwen_user_payload = {
+        quant_user_payload = {
             "symbol": symbol,
             "direction": side,
             "strategy_name": strat_name,
@@ -1237,34 +1332,52 @@ def execute_council_audit(
             "cross_pair_smt_divergence": top_down_context.get("smt_divergence", {}).get("description", "None"),
             "benchmark_context": market_snapshot.get("htf_status")
         }
+
+        # Try primary chosen quant provider (Grok or Qwen)
         try:
             content, model = execute_ai_completion(
-                {**cfg, "ai_provider": "qwen"},
+                {**cfg, "ai_provider": quant_prov},
                 system_prompt=QWEN_QUANT_MACRO_SYSTEM_PROMPT,
-                user_prompt=json.dumps(qwen_user_payload, indent=2),
+                user_prompt=json.dumps(quant_user_payload, indent=2),
                 max_tokens=600
             )
             return parse_ai_json(content), model
         except Exception as e:
-            print(f"[council] Qwen Quant/Macro warning: {e}")
+            print(f"[council] Primary Quant ({quant_prov}) warning: {e}")
+            # Try alternate provider if configured
+            alt_prov = "qwen" if quant_prov in ["grok", "xai"] else "grok"
+            alt_key = (cfg.get("qwen_api_key_override") or os.getenv("QWEN_API_KEY")) if alt_prov == "qwen" else (cfg.get("grok_api_key_override") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY"))
+            if alt_key:
+                try:
+                    print(f"[council] Auto-falling back to alternate Quant ({alt_prov})...")
+                    content, model = execute_ai_completion(
+                        {**cfg, "ai_provider": alt_prov},
+                        system_prompt=QWEN_QUANT_MACRO_SYSTEM_PROMPT,
+                        user_prompt=json.dumps(quant_user_payload, indent=2),
+                        max_tokens=600
+                    )
+                    return parse_ai_json(content), f"{model} (alt-fallback)"
+                except Exception as alt_err:
+                    print(f"[council] Alternate Quant ({alt_prov}) error: {alt_err}")
+
             return {
-                "momentum_volume": {"flaw_or_deduction": f"Qwen fallback: {e}", "score": 5},
+                "momentum_volume": {"flaw_or_deduction": f"Quant fallback: {e}", "score": 5},
                 "news_catalyst": {"flaw_or_deduction": "Default neutral news", "score": 5},
                 "intermarket_tide": {"flaw_or_deduction": "Default neutral tide", "score": 5},
                 "macro_or_funding_veto": False,
-                "quant_summary": f"Qwen connection fallback: {e}"
-            }, "qwen-fallback"
+                "quant_summary": f"Quant connection fallback: {e}"
+            }, f"{quant_prov}-fallback"
 
     # Parallel Stage 1 Execution
-    print(f"[council] 🏛️ Stage 1: Parallel dispatch to Gemini Chartist (40 pts) & Qwen Quant (30 pts) for {symbol} {side}...")
+    print(f"[council] 🏛️ Stage 1: Parallel dispatch to Chartist ({chartist_prov.upper()}, 40 pts) & Quant ({quant_prov.upper()}, 30 pts) for {symbol} {side}...")
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_gem = executor.submit(_run_gemini)
-        future_qwen = executor.submit(_run_qwen)
-        gemini_rep, gemini_model = future_gem.result(timeout=14)
-        qwen_rep, qwen_model = future_qwen.result(timeout=14)
+        future_chart = executor.submit(_run_chartist)
+        future_quant = executor.submit(_run_quant)
+        chartist_rep, chartist_model = future_chart.result(timeout=16)
+        quant_rep, quant_model = future_quant.result(timeout=16)
 
     # Stage 2 Execution: DeepSeek Chief Risk Officer & Final Rubric Judge
-    print(f"[council] ⚖️ Stage 2: DeepSeek Chief Risk Officer auditing Gemini & Qwen reports with adversarial debate...")
+    print(f"[council] ⚖️ Stage 2: DeepSeek Chief Risk Officer auditing Chartist ({chartist_prov}) & Quant ({quant_prov}) reports with adversarial debate...")
     deepseek_user_payload = {
         "candidate_setup": {
             "symbol": symbol,
@@ -1277,8 +1390,10 @@ def execute_council_audit(
             "setup_notes": candidate_setup.get("setup_notes")
         },
         "specialist_reports": {
-            "gemini_chartist_report": gemini_rep,
-            "qwen_quant_macro_report": qwen_rep
+            "chartist_report": chartist_rep,
+            "quant_macro_report": quant_rep,
+            "gemini_chartist_report": chartist_rep,
+            "qwen_quant_macro_report": quant_rep
         },
         "active_bot_lessons": lessons_block
     }
@@ -1297,7 +1412,7 @@ def execute_council_audit(
             "proposed_direction": side,
             "debate": {
                 "bearish_devils_advocate": f"DeepSeek audit fallback: {ds_err}",
-                "bullish_defense": "Specialist signals approved by Gemini and Qwen."
+                "bullish_defense": f"Specialist signals approved by {chartist_prov} and {quant_prov}."
             },
             "kill_switch": {"veto_triggered": False, "veto_reason": None},
             "risk_audit": {"flaw_or_deduction": "Default risk audit score due to timeout", "score": 15},
@@ -1307,12 +1422,12 @@ def execute_council_audit(
 
     # Consensus Synthesis
     total_score, veto_triggered, veto_reason, rubric, council_scores = verify_and_score_council(
-        gemini_rep, qwen_rep, deepseek_rep
+        chartist_rep, quant_rep, deepseek_rep
     )
 
-    primary_model = f"Council (Gemini:{gemini_model} + Qwen:{qwen_model} + DeepSeek:{ds_model})"
+    primary_model = f"Council (Chartist:{chartist_prov}:{chartist_model} + Quant:{quant_prov}:{quant_model} + Judge:DeepSeek:{ds_model})"
 
-    return total_score, veto_triggered, veto_reason, rubric, gemini_rep, qwen_rep, deepseek_rep, council_scores, primary_model
+    return total_score, veto_triggered, veto_reason, rubric, chartist_rep, quant_rep, deepseek_rep, council_scores, primary_model
 
 
 # --- CORRELATED EXPOSURE PROTECTION ---

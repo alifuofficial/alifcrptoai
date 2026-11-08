@@ -125,6 +125,14 @@ interface BotConfig {
   qwen_api_key_override?: string | null;
   qwen_base_url?: string;
   qwen_model?: string;
+  openai_api_key_override?: string | null;
+  openai_model?: string;
+  openai_base_url?: string;
+  grok_api_key_override?: string | null;
+  grok_model?: string;
+  grok_base_url?: string;
+  council_chartist_provider?: "openai" | "gemini";
+  council_quant_provider?: "grok" | "qwen";
   deepseek_key_override?: string | null;
   telegram_token_override?: string | null;
   telegram_chat_id_override?: string | null;
@@ -306,6 +314,7 @@ export default function CommandCenterPage() {
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showStandbyAiProviders, setShowStandbyAiProviders] = useState(false);
 
   // Restore sidebar collapsed preference from localStorage
   useEffect(() => {
@@ -430,6 +439,8 @@ export default function CommandCenterPage() {
     deepseek: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     gemini: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     qwen: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    openai: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
+    grok: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     telegram: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
     database: { status: "idle" | "testing" | "success" | "error"; message?: string; latency?: number };
   }>({
@@ -438,6 +449,8 @@ export default function CommandCenterPage() {
     deepseek: { status: "idle" },
     gemini: { status: "idle" },
     qwen: { status: "idle" },
+    openai: { status: "idle" },
+    grok: { status: "idle" },
     telegram: { status: "idle" },
     database: { status: "idle" },
   });
@@ -783,7 +796,7 @@ export default function CommandCenterPage() {
     setTimeout(() => setToastNotification(null), 4500);
   };
 
-  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "gemini" | "qwen" | "telegram" | "database") => {
+  const testSingleApi = async (service: "binance" | "bybit" | "deepseek" | "gemini" | "qwen" | "openai" | "grok" | "telegram" | "database") => {
     setApiHealth((prev) => ({
       ...prev,
       [service]: { status: "testing", message: "Connecting & verifying endpoint..." },
@@ -819,6 +832,16 @@ export default function CommandCenterPage() {
               baseUrl: formSettings.qwen_base_url,
               apiKey: formSettings.qwen_api_key_override,
               model: formSettings.qwen_model || "qwen3.7-flash",
+            },
+            openai: {
+              apiKey: formSettings.openai_api_key_override,
+              baseUrl: formSettings.openai_base_url || "https://api.openai.com/v1",
+              model: formSettings.openai_model || "gpt-4o-mini",
+            },
+            grok: {
+              apiKey: formSettings.grok_api_key_override,
+              baseUrl: formSettings.grok_base_url || "https://api.x.ai/v1",
+              model: formSettings.grok_model || "grok-beta",
             },
             telegram: {
               token: formSettings.telegram_token_override,
@@ -860,6 +883,8 @@ export default function CommandCenterPage() {
       deepseek: { status: "testing", message: "Testing AI model..." },
       gemini: { status: "testing", message: "Testing Google Gemini..." },
       qwen: { status: "testing", message: "Testing Qwen Quant..." },
+      openai: { status: "testing", message: "Testing OpenAI Chartist..." },
+      grok: { status: "testing", message: "Testing Grok Quant..." },
       telegram: { status: "testing", message: "Testing alerts..." },
       database: { status: "testing", message: "Testing ledger..." },
     });
@@ -895,6 +920,16 @@ export default function CommandCenterPage() {
               apiKey: formSettings.qwen_api_key_override,
               model: formSettings.qwen_model || "qwen3.7-flash",
             },
+            openai: {
+              apiKey: formSettings.openai_api_key_override,
+              baseUrl: formSettings.openai_base_url || "https://api.openai.com/v1",
+              model: formSettings.openai_model || "gpt-4o-mini",
+            },
+            grok: {
+              apiKey: formSettings.grok_api_key_override,
+              baseUrl: formSettings.grok_base_url || "https://api.x.ai/v1",
+              model: formSettings.grok_model || "grok-beta",
+            },
             telegram: {
               token: formSettings.telegram_token_override,
               chatId: formSettings.telegram_chat_id_override,
@@ -911,6 +946,8 @@ export default function CommandCenterPage() {
         const d = data.results.deepseek;
         const g = data.results.gemini;
         const q = data.results.qwen;
+        const oai = data.results.openai;
+        const grk = data.results.grok;
         const t = data.results.telegram;
         const db = data.results.database;
 
@@ -920,6 +957,8 @@ export default function CommandCenterPage() {
           deepseek: { status: d?.success ? "success" : "error", message: d?.message, latency: d?.latencyMs },
           gemini: { status: g?.success ? "success" : "error", message: g?.message, latency: g?.latencyMs },
           qwen: { status: q?.success ? "success" : "error", message: q?.message, latency: q?.latencyMs },
+          openai: { status: oai?.success ? "success" : "error", message: oai?.message, latency: oai?.latencyMs },
+          grok: { status: grk?.success ? "success" : "error", message: grk?.message, latency: grk?.latencyMs },
           telegram: { status: t?.success ? "success" : "error", message: t?.message, latency: t?.latencyMs },
           database: { status: db?.success ? "success" : "error", message: db?.message, latency: db?.latencyMs },
         });
@@ -1033,6 +1072,14 @@ export default function CommandCenterPage() {
         qwen_api_key_override: formSettings.qwen_api_key_override?.trim() || null,
         qwen_base_url: formSettings.qwen_base_url || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         qwen_model: formSettings.qwen_model || "qwen3.7-flash",
+        openai_api_key_override: formSettings.openai_api_key_override?.trim() || null,
+        openai_model: formSettings.openai_model || "gpt-4o-mini",
+        openai_base_url: formSettings.openai_base_url || "https://api.openai.com/v1",
+        grok_api_key_override: formSettings.grok_api_key_override?.trim() || null,
+        grok_model: formSettings.grok_model || "grok-beta",
+        grok_base_url: formSettings.grok_base_url || "https://api.x.ai/v1",
+        council_chartist_provider: formSettings.council_chartist_provider || "openai",
+        council_quant_provider: formSettings.council_quant_provider || "grok",
         deepseek_key_override: formSettings.deepseek_key_override?.trim() || null,
         telegram_token_override: formSettings.telegram_token_override?.trim() || null,
         telegram_chat_id_override: formSettings.telegram_chat_id_override?.trim() || null,
@@ -4359,7 +4406,7 @@ export default function CommandCenterPage() {
                       {
                         id: "council_3model",
                         title: "🏛️ 3-Model AI Council",
-                        desc: "Gemini (Chartist /40) + Qwen (Quant /30) + DeepSeek (Risk /30) parallel consensus",
+                        desc: "Pluggable Council: Chartist (OpenAI/Gemini /40) + Quant (Grok/Qwen /30) + DeepSeek (Risk /30)",
                         badge: "Flagship Consensus",
                         color: "border-purple-500 bg-purple-50/50 text-purple-900"
                       },
@@ -4411,7 +4458,110 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* DeepSeek Sub-Settings (Shown if 'deepseek', 'auto', or 'council_3model') */}
+                {/* Pluggable Council Role Engine Selector */}
+                {(formSettings.ai_provider || "council_3model") === "council_3model" && (
+                  <div className="p-4 rounded-lg border-2 border-purple-200 bg-purple-50/40 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                        <Cpu className="w-3.5 h-3.5 text-purple-600" />
+                        🏛️ 3-Model AI Council: Pluggable Role Assignment
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-200 text-purple-800">
+                        Modular Architecture
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Role 1 Selection: Chartist */}
+                      <div className="bg-white p-3.5 rounded-md border border-purple-100 shadow-2xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-textMain">
+                            Role 1: Top-Down Chartist (40 Pts Max)
+                          </label>
+                          <span className="text-[10px] text-textMuted font-mono">1D→4H→1H→15m Structure</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormSettings({ ...formSettings, council_chartist_provider: "openai" })}
+                            className={`p-2.5 rounded border text-left cursor-pointer transition-all ${
+                              (formSettings.council_chartist_provider || "openai") === "openai"
+                                ? "border-emerald-500 bg-emerald-50/70 text-emerald-950 font-semibold ring-1 ring-emerald-500"
+                                : "border-border bg-slate-50 text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold">OpenAI</span>
+                              <span className="text-[9px] bg-emerald-200 text-emerald-800 px-1 py-0.2 rounded font-bold">ACTIVE</span>
+                            </div>
+                            <p className="text-[10px] text-textMuted">gpt-4o-mini • No card hold</p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setFormSettings({ ...formSettings, council_chartist_provider: "gemini" })}
+                            className={`p-2.5 rounded border text-left cursor-pointer transition-all ${
+                              formSettings.council_chartist_provider === "gemini"
+                                ? "border-blue-500 bg-blue-50/70 text-blue-950 font-semibold ring-1 ring-blue-500"
+                                : "border-border bg-slate-50 text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold">Gemini</span>
+                              <span className="text-[9px] bg-slate-200 text-slate-700 px-1 py-0.2 rounded font-bold">STANDBY</span>
+                            </div>
+                            <p className="text-[10px] text-textMuted">gemini-3.5-flash • Free tier</p>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Role 2 Selection: Quant & News */}
+                      <div className="bg-white p-3.5 rounded-md border border-purple-100 shadow-2xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-textMain">
+                            Role 2: Quant &amp; News (30 Pts Max)
+                          </label>
+                          <span className="text-[10px] text-textMuted font-mono">RVOL, OI &amp; ForexFactory</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormSettings({ ...formSettings, council_quant_provider: "grok" })}
+                            className={`p-2.5 rounded border text-left cursor-pointer transition-all ${
+                              (formSettings.council_quant_provider || "grok") === "grok"
+                                ? "border-emerald-500 bg-emerald-50/70 text-emerald-950 font-semibold ring-1 ring-emerald-500"
+                                : "border-border bg-slate-50 text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold">Grok / xAI</span>
+                              <span className="text-[9px] bg-emerald-200 text-emerald-800 px-1 py-0.2 rounded font-bold">ACTIVE</span>
+                            </div>
+                            <p className="text-[10px] text-textMuted">grok-beta • No KYC needed</p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setFormSettings({ ...formSettings, council_quant_provider: "qwen" })}
+                            className={`p-2.5 rounded border text-left cursor-pointer transition-all ${
+                              formSettings.council_quant_provider === "qwen"
+                                ? "border-amber-500 bg-amber-50/70 text-amber-950 font-semibold ring-1 ring-amber-500"
+                                : "border-border bg-slate-50 text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold">Qwen</span>
+                              <span className="text-[9px] bg-slate-200 text-slate-700 px-1 py-0.2 rounded font-bold">STANDBY</span>
+                            </div>
+                            <p className="text-[10px] text-textMuted">qwen3.7-flash • DashScope</p>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sub-Group: DeepSeek Configuration (Chief Risk Officer & Judge) */}
                 {((formSettings.ai_provider || "council_3model") === "deepseek" || formSettings.ai_provider === "auto" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
                   <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
                     <div className="flex items-center justify-between">
@@ -4487,44 +4637,56 @@ export default function CommandCenterPage() {
                   </div>
                 )}
 
-                {/* Google Gemini Sub-Settings (Shown if 'gemini', 'auto', or 'council_3model') */}
-                {((formSettings.ai_provider || "council_3model") === "gemini" || formSettings.ai_provider === "auto" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
+                {/* Sub-Group: OpenAI Configuration (Chartist Engine) */}
+                {((formSettings.council_chartist_provider || "openai") === "openai" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
                   <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                        Google Gemini (Top-Down Price Action Chartist) Configuration
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        OpenAI (Top-Down Price Action &amp; Market Structure Chartist) Configuration
                       </span>
                       <button
                         type="button"
-                        onClick={() => testSingleApi("gemini")}
-                        disabled={apiHealth.gemini.status === "testing"}
+                        onClick={() => testSingleApi("openai")}
+                        disabled={apiHealth.openai.status === "testing"}
                         className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                       >
-                        {apiHealth.gemini.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-blue-600" />}
-                        <span>Test Gemini</span>
+                        {apiHealth.openai.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-emerald-600" />}
+                        <span>Test OpenAI</span>
                       </button>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-medium text-textMain mb-1">Gemini Model Identifier</label>
-                      <input
-                        type="text"
-                        value={formSettings.gemini_model || "gemini-3.5-flash"}
-                        onChange={(e) => setFormSettings({ ...formSettings, gemini_model: e.target.value })}
-                        placeholder="gemini-3.5-flash"
-                        className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
-                      />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-textMain mb-1">OpenAI Base URL</label>
+                        <input
+                          type="text"
+                          value={formSettings.openai_base_url || "https://api.openai.com/v1"}
+                          onChange={(e) => setFormSettings({ ...formSettings, openai_base_url: e.target.value })}
+                          placeholder="https://api.openai.com/v1"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-textMain mb-1">OpenAI Model Identifier</label>
+                        <input
+                          type="text"
+                          value={formSettings.openai_model || "gpt-4o-mini"}
+                          onChange={(e) => setFormSettings({ ...formSettings, openai_model: e.target.value })}
+                          placeholder="gpt-4o-mini"
+                          className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                        />
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-textMuted font-medium">Quick Presets:</span>
                       {[
-                        { name: "Gemini 3.5 Flash (Recommended)", model: "gemini-3.5-flash" },
-                        { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" },
-                        { name: "Gemini Flash Latest", model: "gemini-flash-latest" },
-                        { name: "Gemini 2.5 Flash Lite", model: "gemini-2.5-flash-lite" },
+                        { name: "GPT-4o-mini (Recommended - $0.15/1M)", model: "gpt-4o-mini" },
+                        { name: "GPT-4o (High-Precision)", model: "gpt-4o" },
+                        { name: "O3-Mini (Reasoning)", model: "o3-mini" },
                       ].map((preset) => {
-                        const isSelected = (formSettings.gemini_model || "gemini-3.5-flash") === preset.model;
+                        const isSelected = (formSettings.openai_model || "gpt-4o-mini") === preset.model;
                         return (
                           <button
                             key={preset.model}
@@ -4532,12 +4694,12 @@ export default function CommandCenterPage() {
                             onClick={() =>
                               setFormSettings({
                                 ...formSettings,
-                                gemini_model: preset.model,
+                                openai_model: preset.model,
                               })
                             }
                             className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
                               isSelected
-                                ? "bg-blue-50 border-blue-400 text-blue-700 font-semibold"
+                                ? "bg-emerald-50 border-emerald-400 text-emerald-800 font-semibold"
                                 : "bg-surface border-border text-textMuted hover:bg-slate-100"
                             }`}
                           >
@@ -4549,43 +4711,43 @@ export default function CommandCenterPage() {
                   </div>
                 )}
 
-                {/* Alibaba Qwen Sub-Settings (Shown if 'council_3model') */}
-                {(formSettings.ai_provider || "council_3model") === "council_3model" && (
+                {/* Sub-Group: Grok / xAI Configuration (Quant & News Analyst) */}
+                {((formSettings.council_quant_provider || "grok") === "grok" || (formSettings.ai_provider || "council_3model") === "council_3model") && (
                   <div className="p-4 rounded-lg border border-border bg-slate-50/50 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                        Alibaba Qwen (Quant Microstructure, RVOL &amp; Macro Analyst) Configuration
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        Grok / xAI (Quant Microstructure, RVOL &amp; Macro Analyst) Configuration
                       </span>
                       <button
                         type="button"
-                        onClick={() => testSingleApi("qwen")}
-                        disabled={apiHealth.qwen.status === "testing"}
+                        onClick={() => testSingleApi("grok")}
+                        disabled={apiHealth.grok.status === "testing"}
                         className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                       >
-                        {apiHealth.qwen.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-amber-600" />}
-                        <span>Test Qwen</span>
+                        {apiHealth.grok.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-emerald-600" />}
+                        <span>Test Grok</span>
                       </button>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-medium text-textMain mb-1">Qwen Base URL</label>
+                        <label className="block text-xs font-medium text-textMain mb-1">Grok Base URL</label>
                         <input
                           type="text"
-                          value={formSettings.qwen_base_url || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}
-                          onChange={(e) => setFormSettings({ ...formSettings, qwen_base_url: e.target.value })}
-                          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+                          value={formSettings.grok_base_url || "https://api.x.ai/v1"}
+                          onChange={(e) => setFormSettings({ ...formSettings, grok_base_url: e.target.value })}
+                          placeholder="https://api.x.ai/v1"
                           className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-textMain mb-1">Qwen Model Identifier</label>
+                        <label className="block text-xs font-medium text-textMain mb-1">Grok Model Identifier</label>
                         <input
                           type="text"
-                          value={formSettings.qwen_model || "qwen3.7-flash"}
-                          onChange={(e) => setFormSettings({ ...formSettings, qwen_model: e.target.value })}
-                          placeholder="qwen3.7-flash"
+                          value={formSettings.grok_model || "grok-beta"}
+                          onChange={(e) => setFormSettings({ ...formSettings, grok_model: e.target.value })}
+                          placeholder="grok-beta"
                           className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                         />
                       </div>
@@ -4593,60 +4755,215 @@ export default function CommandCenterPage() {
 
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[10px] text-textMuted font-medium">Quick Presets:</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormSettings({
-                            ...formSettings,
-                            qwen_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                            qwen_model: "qwen3.7-flash",
-                          })
-                        }
-                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
-                          (formSettings.qwen_base_url || "").includes("dashscope-intl")
-                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
-                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
-                        }`}
-                      >
-                        🇸🇬 Singapore DashScope / Qwen Cloud
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormSettings({
-                            ...formSettings,
-                            qwen_base_url: "https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1",
-                            qwen_model: "qwen3.7-flash",
-                          })
-                        }
-                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
-                          (formSettings.qwen_base_url || "").includes("qwencloudapi")
-                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
-                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
-                        }`}
-                      >
-                        ⚡ QwenCloud Direct (ap-southeast-1)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormSettings({
-                            ...formSettings,
-                            qwen_base_url: "https://openrouter.ai/api/v1",
-                            qwen_model: "qwen/qwen-2.5-72b-instruct",
-                          })
-                        }
-                        className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
-                          (formSettings.qwen_base_url || "").includes("openrouter.ai")
-                            ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
-                            : "bg-surface border-border text-textMuted hover:bg-slate-100"
-                        }`}
-                      >
-                        🌐 OpenRouter (Global Fallback)
-                      </button>
+                      {[
+                        { name: "grok-beta (Standard)", model: "grok-beta" },
+                        { name: "grok-2-latest", model: "grok-2-latest" },
+                        { name: "grok-2-vision-1212", model: "grok-2-vision-1212" },
+                      ].map((preset) => {
+                        const isSelected = (formSettings.grok_model || "grok-beta") === preset.model;
+                        return (
+                          <button
+                            key={preset.model}
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                grok_model: preset.model,
+                              })
+                            }
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-emerald-50 border-emerald-400 text-emerald-800 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            <span>{preset.name}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
+
+                {/* Standby & Reserved AI Providers Collapsible (Google Gemini & Alibaba Qwen) */}
+                <div className="border border-dashed border-border rounded-lg overflow-hidden bg-slate-50/30">
+                  <button
+                    type="button"
+                    onClick={() => setShowStandbyAiProviders(!showStandbyAiProviders)}
+                    className="w-full flex items-center justify-between p-3.5 bg-slate-100/70 hover:bg-slate-100 transition-colors cursor-pointer text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <ChevronRight className={`w-4 h-4 text-slate-500 transition-transform ${showStandbyAiProviders ? "rotate-90" : ""}`} />
+                      <span className="text-xs font-bold text-textMain">
+                        Secondary &amp; Reserved AI Providers (Google Gemini &amp; Alibaba Qwen — In Standby)
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded">
+                      Preserved in Code • Ready for Later Selection
+                    </span>
+                  </button>
+
+                  {showStandbyAiProviders && (
+                    <div className="p-4 space-y-4 border-t border-border bg-white">
+                      {/* Google Gemini Sub-Settings */}
+                      <div className="p-3.5 rounded-lg border border-border bg-slate-50/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                            Google Gemini (Top-Down Price Action Chartist) Configuration
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => testSingleApi("gemini")}
+                            disabled={apiHealth.gemini.status === "testing"}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            {apiHealth.gemini.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-blue-600" />}
+                            <span>Test Gemini</span>
+                          </button>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-textMain mb-1">Gemini Model Identifier</label>
+                          <input
+                            type="text"
+                            value={formSettings.gemini_model || "gemini-3.5-flash"}
+                            onChange={(e) => setFormSettings({ ...formSettings, gemini_model: e.target.value })}
+                            placeholder="gemini-3.5-flash"
+                            className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {[
+                            { name: "Gemini 3.5 Flash (Recommended)", model: "gemini-3.5-flash" },
+                            { name: "Gemini 3.8 Flash", model: "gemini-3.8-flash" },
+                            { name: "Gemini Flash Latest", model: "gemini-flash-latest" },
+                            { name: "Gemini 2.5 Flash Lite", model: "gemini-2.5-flash-lite" },
+                          ].map((preset) => {
+                            const isSelected = (formSettings.gemini_model || "gemini-3.5-flash") === preset.model;
+                            return (
+                              <button
+                                key={preset.model}
+                                type="button"
+                                onClick={() =>
+                                  setFormSettings({
+                                    ...formSettings,
+                                    gemini_model: preset.model,
+                                  })
+                                }
+                                className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                                  isSelected
+                                    ? "bg-blue-50 border-blue-400 text-blue-700 font-semibold"
+                                    : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                                }`}
+                              >
+                                <span>{preset.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Alibaba Qwen Sub-Settings */}
+                      <div className="p-3.5 rounded-lg border border-border bg-slate-50/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-textMain flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                            Alibaba Qwen (Quant Microstructure, RVOL &amp; Macro Analyst) Configuration
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => testSingleApi("qwen")}
+                            disabled={apiHealth.qwen.status === "testing"}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            {apiHealth.qwen.status === "testing" ? <Loader2 className="h-3 w-3 animate-spin text-brand-600" /> : <Check className="h-3 w-3 text-amber-600" />}
+                            <span>Test Qwen</span>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-textMain mb-1">Qwen Base URL</label>
+                            <input
+                              type="text"
+                              value={formSettings.qwen_base_url || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}
+                              onChange={(e) => setFormSettings({ ...formSettings, qwen_base_url: e.target.value })}
+                              placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+                              className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-textMain mb-1">Qwen Model Identifier</label>
+                            <input
+                              type="text"
+                              value={formSettings.qwen_model || "qwen3.7-flash"}
+                              onChange={(e) => setFormSettings({ ...formSettings, qwen_model: e.target.value })}
+                              placeholder="qwen3.7-flash"
+                              className="w-full rounded-md border border-border bg-surface py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] text-textMuted font-medium">Quick Presets:</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                qwen_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                                qwen_model: "qwen3.7-flash",
+                              })
+                            }
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                              (formSettings.qwen_base_url || "").includes("dashscope-intl")
+                                ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            🇸🇬 Singapore DashScope / Qwen Cloud
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                qwen_base_url: "https://ap-southeast-1.maas.qwencloudapi.com/compatible-mode/v1",
+                                qwen_model: "qwen3.7-flash",
+                              })
+                            }
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                              (formSettings.qwen_base_url || "").includes("qwencloudapi")
+                                ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            ⚡ QwenCloud Direct (ap-southeast-1)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormSettings({
+                                ...formSettings,
+                                qwen_base_url: "https://openrouter.ai/api/v1",
+                                qwen_model: "qwen/qwen-2.5-72b-instruct",
+                              })
+                            }
+                            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border transition-all cursor-pointer ${
+                              (formSettings.qwen_base_url || "").includes("openrouter.ai")
+                                ? "bg-amber-50 border-amber-400 text-amber-800 font-semibold"
+                                : "bg-surface border-border text-textMuted hover:bg-slate-100"
+                            }`}
+                          >
+                            🌐 OpenRouter (Global Fallback)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Encrypted API Keys */}
@@ -4902,50 +5219,50 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* Sub-Group 3: Google Gemini AI Credentials */}
+                {/* Sub-Group 3: OpenAI API Credentials (Active Chartist Engine) */}
                 <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                      <span>Google Gemini API Key (Free Tier)</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span>OpenAI API Key (sk-...) — Active Chartist Engine</span>
                     </h4>
                     <button
                       type="button"
-                      onClick={() => testSingleApi("gemini")}
-                      disabled={apiHealth.gemini.status === "testing"}
+                      onClick={() => testSingleApi("openai")}
+                      disabled={apiHealth.openai.status === "testing"}
                       className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
-                      {apiHealth.gemini.status === "testing" ? (
+                      {apiHealth.openai.status === "testing" ? (
                         <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
                       ) : (
-                        <Check className="h-3 w-3 text-blue-600" />
+                        <Check className="h-3 w-3 text-emerald-600" />
                       )}
-                      <span>Test Gemini Key</span>
+                      <span>Test OpenAI Key</span>
                     </button>
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-textMain">
-                        Google AI Studio Key
+                        OpenAI Platform API Key (sk-...)
                       </label>
                       <a
-                        href="https://aistudio.google.com/app/apikey"
+                        href="https://platform.openai.com/api-keys"
                         target="_blank"
                         rel="noreferrer"
-                        className="text-[11px] text-brand-600 hover:underline flex items-center gap-1 font-medium"
+                        className="text-[11px] text-emerald-700 hover:underline flex items-center gap-1 font-medium"
                       >
-                        <span>Get Free Key at Google AI Studio &rarr;</span>
+                        <span>Get Key at OpenAI Platform &rarr;</span>
                       </a>
                     </div>
                     <div className="relative">
                       <input
-                        type={showSecretKeys["gemini_api_key_override"] ? "text" : "password"}
-                        value={formSettings.gemini_api_key_override || ""}
+                        type={showSecretKeys["openai_api_key_override"] ? "text" : "password"}
+                        value={formSettings.openai_api_key_override || ""}
                         onChange={(e) =>
-                          setFormSettings({ ...formSettings, gemini_api_key_override: e.target.value })
+                          setFormSettings({ ...formSettings, openai_api_key_override: e.target.value })
                         }
-                        placeholder="AIzaSy••••••••••••••••••••••••••••••••••"
+                        placeholder="sk-proj-••••••••••••••••••••••••••••••••"
                         className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                       />
                       <button
@@ -4953,12 +5270,12 @@ export default function CommandCenterPage() {
                         onClick={() =>
                           setShowSecretKeys({
                             ...showSecretKeys,
-                            gemini_api_key_override: !showSecretKeys["gemini_api_key_override"],
+                            openai_api_key_override: !showSecretKeys["openai_api_key_override"],
                           })
                         }
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
-                        {showSecretKeys["gemini_api_key_override"] ? (
+                        {showSecretKeys["openai_api_key_override"] ? (
                           <EyeOff className="h-4 w-4" />
                         ) : (
                           <Eye className="h-4 w-4" />
@@ -4966,55 +5283,55 @@ export default function CommandCenterPage() {
                       </button>
                     </div>
                     <span className="text-[10px] text-textMuted mt-1 block">
-                      Free tier provides 15 requests per minute and 1,500 requests per day at zero charge.
+                      Powers Role 1: Top-Down Market Structure, HTF Trend, FVG &amp; Order Block analysis via <code>gpt-4o-mini</code> (no card hold required).
                     </span>
                   </div>
                 </div>
 
-                {/* Sub-Group 4: Alibaba Qwen AI Credentials (Quant & Macro Analyst) */}
+                {/* Sub-Group 4: Grok / xAI API Credentials (Active Quant & Macro Analyst) */}
                 <div className="p-4 rounded-md border border-border bg-slate-50/50 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                      <span>Alibaba Qwen API Key (Singapore DashScope / OpenRouter)</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span>Grok / xAI API Key (xai-...) — Active Quant Analyst</span>
                     </h4>
                     <button
                       type="button"
-                      onClick={() => testSingleApi("qwen")}
-                      disabled={apiHealth.qwen.status === "testing"}
+                      onClick={() => testSingleApi("grok")}
+                      disabled={apiHealth.grok.status === "testing"}
                       className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
-                      {apiHealth.qwen.status === "testing" ? (
+                      {apiHealth.grok.status === "testing" ? (
                         <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
                       ) : (
-                        <Check className="h-3 w-3 text-amber-600" />
+                        <Check className="h-3 w-3 text-emerald-600" />
                       )}
-                      <span>Test Qwen Key</span>
+                      <span>Test Grok Key</span>
                     </button>
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-textMain">
-                        Qwen Cloud / DashScope API Key (sk-...)
+                        xAI Console API Key (xai-...)
                       </label>
                       <a
-                        href="https://www.qwencloud.com/"
+                        href="https://console.x.ai/"
                         target="_blank"
                         rel="noreferrer"
-                        className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-medium"
+                        className="text-[11px] text-emerald-700 hover:underline flex items-center gap-1 font-medium"
                       >
-                        <span>Get Official Key at Qwen Cloud (qwencloud.com) &rarr;</span>
+                        <span>Get Key at xAI Console (console.x.ai) &rarr;</span>
                       </a>
                     </div>
                     <div className="relative">
                       <input
-                        type={showSecretKeys["qwen_api_key_override"] ? "text" : "password"}
-                        value={formSettings.qwen_api_key_override || ""}
+                        type={showSecretKeys["grok_api_key_override"] ? "text" : "password"}
+                        value={formSettings.grok_api_key_override || ""}
                         onChange={(e) =>
-                          setFormSettings({ ...formSettings, qwen_api_key_override: e.target.value })
+                          setFormSettings({ ...formSettings, grok_api_key_override: e.target.value })
                         }
-                        placeholder="sk-••••••••••••••••••••••••••••••••"
+                        placeholder="xai-••••••••••••••••••••••••••••••••"
                         className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
                       />
                       <button
@@ -5022,12 +5339,12 @@ export default function CommandCenterPage() {
                         onClick={() =>
                           setShowSecretKeys({
                             ...showSecretKeys,
-                            qwen_api_key_override: !showSecretKeys["qwen_api_key_override"],
+                            grok_api_key_override: !showSecretKeys["grok_api_key_override"],
                           })
                         }
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
-                        {showSecretKeys["qwen_api_key_override"] ? (
+                        {showSecretKeys["grok_api_key_override"] ? (
                           <EyeOff className="h-4 w-4" />
                         ) : (
                           <Eye className="h-4 w-4" />
@@ -5035,9 +5352,170 @@ export default function CommandCenterPage() {
                       </button>
                     </div>
                     <span className="text-[10px] text-textMuted mt-1 block">
-                      Powers Role 2: Quantitative Microstructure, Relative Volume (RVOL), Funding Rates, and USD Red-Folder Macro Blackout auditing.
+                      Powers Role 2: Quantitative Microstructure, Relative Volume (RVOL), Open Interest (OI), and ForexFactory Macro auditing via <code>grok-beta</code> (no KYC required).
                     </span>
                   </div>
+                </div>
+
+                {/* Standby / Reserved API Keys Collapsible (Google Gemini & Alibaba Qwen) */}
+                <div className="border border-dashed border-border rounded-lg overflow-hidden bg-slate-50/30">
+                  <button
+                    type="button"
+                    onClick={() => setShowStandbyAiProviders(!showStandbyAiProviders)}
+                    className="w-full flex items-center justify-between p-3.5 bg-slate-100/70 hover:bg-slate-100 transition-colors cursor-pointer text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <ChevronRight className={`w-4 h-4 text-slate-500 transition-transform ${showStandbyAiProviders ? "rotate-90" : ""}`} />
+                      <span className="text-xs font-bold text-textMain">
+                        Secondary &amp; Reserved API Keys (Google Gemini &amp; Alibaba Qwen — Standby)
+                      </span>
+                    </div>
+                    <span className="text-[10px] bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded">
+                      Preserved in Code • Ready for Later Selection
+                    </span>
+                  </button>
+
+                  {showStandbyAiProviders && (
+                    <div className="p-4 space-y-4 border-t border-border bg-white">
+                      {/* Google Gemini AI Credentials */}
+                      <div className="p-3.5 rounded-md border border-border bg-slate-50/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                            <span>Google Gemini API Key (Free Tier)</span>
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => testSingleApi("gemini")}
+                            disabled={apiHealth.gemini.status === "testing"}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            {apiHealth.gemini.status === "testing" ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                            ) : (
+                              <Check className="h-3 w-3 text-blue-600" />
+                            )}
+                            <span>Test Gemini Key</span>
+                          </button>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-medium text-textMain">
+                              Google AI Studio Key
+                            </label>
+                            <a
+                              href="https://aistudio.google.com/app/apikey"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] text-brand-600 hover:underline flex items-center gap-1 font-medium"
+                            >
+                              <span>Get Free Key at Google AI Studio &rarr;</span>
+                            </a>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type={showSecretKeys["gemini_api_key_override"] ? "text" : "password"}
+                              value={formSettings.gemini_api_key_override || ""}
+                              onChange={(e) =>
+                                setFormSettings({ ...formSettings, gemini_api_key_override: e.target.value })
+                              }
+                              placeholder="AIzaSy••••••••••••••••••••••••••••••••••"
+                              className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowSecretKeys({
+                                  ...showSecretKeys,
+                                  gemini_api_key_override: !showSecretKeys["gemini_api_key_override"],
+                                })
+                              }
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              {showSecretKeys["gemini_api_key_override"] ? (
+                                <EyeOff className="h-4 w-4" />
+                              ) : (
+                                <Eye className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <span className="text-[10px] text-textMuted mt-1 block">
+                            Free tier provides 15 requests per minute and 1,500 requests per day at zero charge.
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Alibaba Qwen AI Credentials */}
+                      <div className="p-3.5 rounded-md border border-border bg-slate-50/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-textMain flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                            <span>Alibaba Qwen API Key (Singapore DashScope / OpenRouter)</span>
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => testSingleApi("qwen")}
+                            disabled={apiHealth.qwen.status === "testing"}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border bg-surface hover:bg-slate-100 text-textMain flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            {apiHealth.qwen.status === "testing" ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-brand-600" />
+                            ) : (
+                              <Check className="h-3 w-3 text-amber-600" />
+                            )}
+                            <span>Test Qwen Key</span>
+                          </button>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-medium text-textMain">
+                              Qwen Cloud / DashScope API Key (sk-...)
+                            </label>
+                            <a
+                              href="https://www.qwencloud.com/"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-medium"
+                            >
+                              <span>Get Official Key at Qwen Cloud (qwencloud.com) &rarr;</span>
+                            </a>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type={showSecretKeys["qwen_api_key_override"] ? "text" : "password"}
+                              value={formSettings.qwen_api_key_override || ""}
+                              onChange={(e) =>
+                                setFormSettings({ ...formSettings, qwen_api_key_override: e.target.value })
+                              }
+                              placeholder="sk-••••••••••••••••••••••••••••••••"
+                              className="w-full rounded-md border border-border bg-surface py-2 px-3 pr-10 text-xs text-textMain font-mono focus:border-brand-500 focus:outline-hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowSecretKeys({
+                                  ...showSecretKeys,
+                                  qwen_api_key_override: !showSecretKeys["qwen_api_key_override"],
+                                })
+                              }
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              {showSecretKeys["qwen_api_key_override"] ? (
+                                <EyeOff className="h-4 w-4" />
+                              ) : (
+                                <Eye className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <span className="text-[10px] text-textMuted mt-1 block">
+                            Powers Role 2: Quantitative Microstructure, Relative Volume (RVOL), Funding Rates, and USD Red-Folder Macro Blackout auditing.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Sub-Group 5: Telegram Alert Credentials */}
