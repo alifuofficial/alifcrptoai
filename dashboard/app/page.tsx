@@ -1001,7 +1001,8 @@ export default function CommandCenterPage() {
     setConfig({ ...config, sandbox_mode: newSandbox });
     const { error } = await supabase.from("bot_config").update({ sandbox_mode: newSandbox }).eq("id", 1);
     if (!error) {
-      showToast(`Switched mode to ${newSandbox ? "TESTNET / DEMO" : "LIVE BINANCE USDM"}`);
+      const brokerName = config.exchange_mode === "bybit" ? "BYBIT" : config.exchange_mode === "dual" ? "DUAL EXCHANGES" : "BINANCE";
+      showToast(`Switched mode to ${newSandbox ? `${brokerName} DEMO` : `LIVE ${brokerName}`}`);
     }
   };
 
@@ -1865,7 +1866,7 @@ export default function CommandCenterPage() {
 
             <span className="hidden sm:inline">DESK</span>
             <ChevronRight className="w-3 h-3 hidden sm:inline" />
-            <span className="font-semibold text-textMain capitalize truncate text-xs sm:text-sm">
+            <span className="font-semibold text-textMain capitalize truncate text-xs sm:text-sm max-w-[140px] sm:max-w-[200px] lg:max-w-xs xl:max-w-sm">
               {activeSection === "chart" && "Live Execution Chart & Positions"}
               {activeSection === "journal" && "Trading Journal & Analytics"}
               {activeSection === "overview" && "Executive Telemetry & Balance"}
@@ -1880,33 +1881,21 @@ export default function CommandCenterPage() {
           </div>
 
           {/* Status Toggles & Panic Button */}
-          <div className="flex items-center space-x-1.5 sm:space-x-3 text-xs font-medium shrink-0">
+          <div className="flex items-center space-x-1.5 sm:space-x-2 text-xs font-medium shrink-0 overflow-x-auto no-scrollbar py-0.5">
             {/* World Session Clock Widget */}
             <div
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 border border-border bg-slate-50/90 rounded-md text-xs font-mono shadow-2xs"
+              className="hidden md:flex items-center gap-1.5 px-2 py-1.5 border border-border bg-slate-50/90 rounded-md text-xs font-mono shadow-2xs shrink-0"
               title={liveForexSession.description}
             >
               <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-              <span className="font-semibold text-textMain tabular-nums">{utcClockStr || "00:00:00"} UTC</span>
+              <span className="font-semibold text-textMain tabular-nums">{utcClockStr ? utcClockStr.slice(0, 5) : "00:00"} UTC</span>
               <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${liveForexSession.badgeClass}`}>
                 {liveForexSession.name}
               </span>
             </div>
 
-            {/* Exchange Operating Mode Indicator */}
-            <div className={`hidden sm:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
-              config?.exchange_mode === "dual"
-                ? "bg-purple-50 border-purple-200 text-purple-700"
-                : config?.exchange_mode === "bybit"
-                ? "bg-amber-50 border-amber-200 text-amber-700"
-                : "bg-blue-50 border-blue-200 text-blue-700"
-            }`}>
-              <Layers className="w-3.5 h-3.5 mr-1.5 shrink-0" />
-              <span>{config?.exchange_mode === "dual" ? "DUAL (CRYPTO + FX)" : config?.exchange_mode === "bybit" ? "BYBIT (FOREX)" : "BINANCE (CRYPTO)"}</span>
-            </div>
-
             {/* AI Provider Indicator */}
-            <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
+            <div className={`hidden md:flex items-center px-2 py-1.5 rounded-md border text-xs font-semibold shrink-0 ${
               config?.ai_provider === "technical"
                 ? "bg-amber-50 border-amber-300 text-amber-800 shadow-2xs"
                 : (config?.ai_provider || "council_3model") === "council_3model"
@@ -1917,88 +1906,102 @@ export default function CommandCenterPage() {
                 ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                 : "bg-indigo-50 border-indigo-200 text-indigo-700"
             }`}>
-              <Cpu className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+              <Cpu className="w-3.5 h-3.5 mr-1 shrink-0" />
               <span>{
                 config?.ai_provider === "technical"
-                  ? "⚡ RAW TECHNICAL"
+                  ? "⚡ RAW TECH"
                   : (config?.ai_provider || "council_3model") === "council_3model"
-                  ? "🏛️ 3-MODEL COUNCIL"
+                  ? "🏛️ COUNCIL"
                   : config?.ai_provider === "gemini"
-                  ? "GEMINI (FREE)"
+                  ? "GEMINI"
                   : config?.ai_provider === "auto"
-                  ? "HYBRID (DS+GEMINI)"
+                  ? "HYBRID"
                   : "DEEPSEEK"
               }</span>
             </div>
 
+            {/* Running / Paused Master Switch */}
             <button
               onClick={toggleBotActive}
-              className={`flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer text-xs ${
+              className={`flex items-center px-2 py-1.5 rounded-md border transition-colors cursor-pointer text-xs shrink-0 font-semibold ${
                 config?.is_active
                   ? "bg-emerald-50 border-emerald-200 text-emerald-700"
                   : "bg-amber-50 border-amber-200 text-amber-700"
               }`}
             >
               {config?.is_active ? (
-                <PlayCircle className="w-3.5 h-3.5 sm:mr-1.5" />
+                <PlayCircle className="w-3.5 h-3.5 sm:mr-1 shrink-0" />
               ) : (
-                <PauseCircle className="w-3.5 h-3.5 sm:mr-1.5" />
+                <PauseCircle className="w-3.5 h-3.5 sm:mr-1 shrink-0" />
               )}
               <span className="hidden sm:inline">{config?.is_active ? "RUNNING" : "PAUSED"}</span>
             </button>
 
+            {/* Unified Active Broker & Live/Demo Mode Switcher (Isolates Bybit vs Binance) */}
             <button
               onClick={toggleSandboxMode}
-              className={`flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer text-xs ${
+              title={
                 config?.sandbox_mode
-                  ? "bg-blue-50 border-blue-200 text-blue-700"
-                  : "bg-rose-50 border-rose-200 text-rose-700"
+                  ? `Switch ${config?.exchange_mode === "bybit" ? "Bybit" : config?.exchange_mode === "dual" ? "Dual Exchange" : "Binance"} to Live Margin Execution`
+                  : `Switch ${config?.exchange_mode === "bybit" ? "Bybit" : config?.exchange_mode === "dual" ? "Dual Exchange" : "Binance"} to Testnet / Demo Mode`
+              }
+              className={`flex items-center px-2 py-1.5 rounded-md border transition-all cursor-pointer text-xs font-bold shrink-0 ${
+                config?.sandbox_mode
+                  ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100/70"
+                  : "bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100/70"
               }`}
             >
-              <Radio className="w-3.5 h-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">{config?.sandbox_mode ? "TESTNET / DEMO" : "LIVE BINANCE"}</span>
-              <span className="sm:hidden">{config?.sandbox_mode ? "DEMO" : "LIVE"}</span>
+              <Radio className={`w-3.5 h-3.5 sm:mr-1 shrink-0 ${!config?.sandbox_mode ? "animate-pulse text-rose-600" : "text-blue-600"}`} />
+              <span>
+                {config?.sandbox_mode
+                  ? `${config?.exchange_mode === "bybit" ? "BYBIT" : config?.exchange_mode === "dual" ? "DUAL" : "BINANCE"} DEMO`
+                  : `LIVE ${config?.exchange_mode === "bybit" ? "BYBIT" : config?.exchange_mode === "dual" ? "DUAL" : "BINANCE"}`}
+              </span>
             </button>
 
             {/* Dynamic Balance State: Live Margin vs Zero-Balance Paper Mode */}
-            <div className={`hidden md:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border text-xs font-semibold ${
+            <div className={`hidden sm:flex items-center px-2 py-1.5 rounded-md border text-xs font-semibold shrink-0 ${
               Number(latestSnapshot?.equity_usdt ?? 0) >= 10
                 ? "bg-emerald-50 border-emerald-300 text-emerald-800"
                 : "bg-amber-50 border-amber-300 text-amber-800"
             }`}>
               {Number(latestSnapshot?.equity_usdt ?? 0) >= 10 ? (
                 <>
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-emerald-600 shrink-0" />
-                  <span>LIVE MARGIN (${Number(latestSnapshot?.equity_usdt ?? 0).toFixed(2)})</span>
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600 shrink-0" />
+                  <span>${Number(latestSnapshot?.equity_usdt ?? 0).toFixed(2)}</span>
                 </>
               ) : (
                 <>
-                  <Zap className="w-3.5 h-3.5 mr-1.5 text-amber-600 shrink-0" />
-                  <span>PAPER (${Number(config?.simulated_equity ?? 1000).toLocaleString()} VIRTUAL)</span>
+                  <Zap className="w-3.5 h-3.5 mr-1 text-amber-600 shrink-0" />
+                  <span>${Number(config?.simulated_equity ?? 1000).toLocaleString()} VIRTUAL</span>
                 </>
               )}
             </div>
 
-            {/* Live Portfolio Win Rate Indicator */}
-            <div className="hidden lg:flex items-center px-2 sm:px-2.5 py-1.5 rounded-md border border-emerald-200 bg-emerald-50/70 text-emerald-800 text-xs font-bold tabular-nums">
-              <span className="mr-1">🏆 WIN RATE:</span>
-              <span>{overallStats.winRate}%</span>
-              <span className="text-[10px] text-emerald-600 ml-1 font-medium">({overallStats.totalWins}W/{Math.max(0, overallStats.totalClosed - overallStats.totalWins)}L)</span>
+            {/* Compact Live Portfolio Win Rate Indicator */}
+            <div
+              className="flex items-center px-2 py-1.5 rounded-md border border-emerald-200 bg-emerald-50/70 text-emerald-800 text-xs font-bold tabular-nums shrink-0"
+              title={`Win Rate: ${overallStats.winRate}% across ${overallStats.totalClosed} closed trades (${overallStats.totalWins} Wins / ${Math.max(0, overallStats.totalClosed - overallStats.totalWins)} Losses)`}
+            >
+              <span className="mr-1">🏆</span>
+              <span>{overallStats.winRate}% WR</span>
             </div>
 
-            <div className="hidden lg:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md">
-              <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-500" /> NORMAL
+            {/* Auxiliary telemetry on ultra-wide screens */}
+            <div className="hidden 2xl:flex items-center px-2 py-1.5 border border-border text-textMain rounded-md shrink-0">
+              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-emerald-500" /> NORMAL
             </div>
 
-            <div className="hidden xl:flex items-center px-2.5 py-1.5 border border-border text-textMain rounded-md tabular-nums">
-              <Gauge className="w-3.5 h-3.5 mr-1.5 text-brand-500" /> {calculatedExposure.current}% / {calculatedExposure.max}%
+            <div className="hidden 2xl:flex items-center px-2 py-1.5 border border-border text-textMain rounded-md tabular-nums shrink-0">
+              <Gauge className="w-3.5 h-3.5 mr-1 text-brand-500" /> {calculatedExposure.current}% / {calculatedExposure.max}%
             </div>
 
+            {/* Panic Close Switch */}
             <button
               onClick={() => setShowPanicModal(true)}
-              className="flex items-center px-2 sm:px-3 py-1.5 border border-rose-600 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer text-xs font-bold"
+              className="flex items-center px-2 sm:px-2.5 py-1.5 border border-rose-600 text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer text-xs font-bold shrink-0"
             >
-              <AlertOctagon className="w-3.5 h-3.5 sm:mr-1.5" />
+              <AlertOctagon className="w-3.5 h-3.5 sm:mr-1 shrink-0" />
               <span className="hidden sm:inline">PANIC CLOSE</span>
               <span className="sm:hidden">PANIC</span>
             </button>
@@ -2036,7 +2039,7 @@ export default function CommandCenterPage() {
                         </span>
                       </div>
                       <p className="text-xs text-slate-700 mt-1 leading-relaxed">
-                        Acting like you have balance! Scanning 15m candles and executing setups in paper mode with Banker&apos;s partial exits (+1.5R partial bank &amp; BE, +3.0R bank, +5.0R trail) and real-time win rate tracking. <strong>Once real balance (&ge; $10) is deposited to Binance or Bybit, live margin orders will execute automatically.</strong>
+                        Acting like you have balance! Scanning 15m candles and executing setups in paper mode with Banker&apos;s partial exits (+1.5R partial bank &amp; BE, +3.0R bank, +5.0R trail) and real-time win rate tracking. <strong>Once real balance (&ge; $10) is deposited to {config?.exchange_mode === "bybit" ? "Bybit" : config?.exchange_mode === "binance" ? "Binance" : "Binance or Bybit"}, live margin orders will execute automatically.</strong>
                       </p>
                     </div>
                   </div>
@@ -4051,7 +4054,7 @@ export default function CommandCenterPage() {
                       <div>
                         <span className="text-xs font-black text-slate-900">Virtual Balance (Zero-Balance Paper Mode)</span>
                         <p className="text-[11px] text-slate-600">
-                          When your Binance or Bybit exchange balance is $0.00, the bot acts like you have this balance to calculate position sizes and track your win rate in real time.
+                          When your {formSettings.exchange_mode === "bybit" ? "Bybit" : formSettings.exchange_mode === "binance" ? "Binance" : "Binance or Bybit"} exchange balance is $0.00, the bot acts like you have this balance to calculate position sizes and track your win rate in real time.
                         </p>
                       </div>
                     </div>
@@ -4088,7 +4091,7 @@ export default function CommandCenterPage() {
                       />
                     </div>
                     <span className="text-[11px] text-slate-600 font-medium">
-                      💡 <strong>Automatic Live Switch:</strong> Once real balance (&ge; $10) is deposited to Binance or Bybit, the bot automatically trades with your live balance.
+                      💡 <strong>Automatic Live Switch:</strong> Once real balance (&ge; $10) is deposited to {formSettings.exchange_mode === "bybit" ? "Bybit" : formSettings.exchange_mode === "binance" ? "Binance" : "Binance or Bybit"}, the bot automatically trades with your live balance.
                     </span>
                   </div>
                 </div>
