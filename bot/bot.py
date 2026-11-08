@@ -2464,14 +2464,14 @@ def scan_and_execute_signals(
                         session_info
                     )
                 else:
-                    print(f"[scanner] Requesting AI Risk Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()}) via {active_prov.upper()}...")
+                    print(f"[scanner] Requesting Autonomous AI Risk Audit for {symbol} {side} ({strat_name}, {exchange_name.upper()}) via {active_prov.upper()}...")
                     model_used = cfg.get("deepseek_model", "deepseek-chat")
                     try:
                         content, model_used = execute_ai_completion(
                             cfg,
                             system_prompt=SYSTEM_AUDIT_PROMPT,
                             user_prompt=f"Audit this candidate setup:\n{json.dumps(audit_payload, indent=2)}",
-                            max_tokens=700
+                            max_tokens=1000
                         )
                         raw_audit = parse_ai_json(content)
                     except Exception as ai_err:
@@ -2479,6 +2479,26 @@ def scan_and_execute_signals(
                         raw_audit = {"veto_triggered": True, "veto_reason": f"AI API communication failure ({ai_err})"}
 
                     total_score, veto_triggered, veto_reason, rubric = verify_and_score_audit(raw_audit)
+                    deepseek_rep = raw_audit
+
+                    # Synthesize Chartist & Quant representations so telemetry is populated across all tabs
+                    gemini_rep = {
+                        "htf_bias": daily_1d_info.get("bias", "NEUTRAL"),
+                        "htf_regime": rubric.get("htf_regime", {}),
+                        "ltf_location": rubric.get("ltf_location", {}),
+                        "key_support": daily_1d_info.get("key_support", 0.0),
+                        "key_resistance": daily_1d_info.get("key_resistance", 0.0),
+                        "chart_veto": veto_triggered and ("sweep" in str(veto_reason).lower() or "htf" in str(veto_reason).lower()),
+                        "chart_verdict": raw_audit.get("execution_notes", "Evaluated autonomously by DeepSeek Lead Auditor.")
+                    }
+                    qwen_rep = {
+                        "momentum_volume": rubric.get("momentum_volume", {}),
+                        "news_catalyst": rubric.get("news_catalyst", {}),
+                        "intermarket_tide": rubric.get("intermarket_tide", {}),
+                        "macro_or_funding_veto": veto_triggered and ("macro" in str(veto_reason).lower() or "funding" in str(veto_reason).lower()),
+                        "quant_summary": raw_audit.get("execution_notes", "Evaluated autonomously by DeepSeek Lead Auditor.")
+                    }
+                    council_scores = None
 
                 # Log to ai_audit_logs
                 supabase.table("ai_audit_logs").insert({
@@ -2642,7 +2662,9 @@ def scan_and_execute_signals(
                     "entry_rvol": rvol,
                     "entry_scores": {
                         "total_score": total_score,
-                        "rubric": rubric
+                        "rubric": rubric,
+                        "council_scores": council_scores,
+                        "ai_provider": active_prov
                     },
                     "is_simulated": is_simulated,
                     "trader_notes": f"ANALYTICAL SIGNAL: Zero-Balance Paper Tracking ({exchange_name.upper()})" if is_zero_balance_mode else "",

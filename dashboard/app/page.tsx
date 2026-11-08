@@ -3101,7 +3101,7 @@ export default function CommandCenterPage() {
                           </div>
                         )}
 
-                        {audit.council_scores ? (
+                        {audit.council_scores && (audit.council_scores.gemini !== undefined || audit.council_scores.chartist !== undefined) ? (
                           <div className="mt-4 space-y-3">
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                               {/* Pillar 1: Gemini Chartist */}
@@ -3111,7 +3111,7 @@ export default function CommandCenterPage() {
                                     <span>📊</span> 1. Gemini Chartist
                                   </span>
                                   <span className="font-mono font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded text-xs">
-                                    {audit.council_scores.gemini ?? 0} / 40 pts
+                                    {(audit.council_scores.chartist ?? audit.council_scores.gemini ?? 0)} / 40 pts
                                   </span>
                                 </div>
                                 <div className="space-y-1 text-[11px] text-blue-950">
@@ -3142,7 +3142,7 @@ export default function CommandCenterPage() {
                                     <span>⚡</span> 2. Qwen Quant &amp; Macro
                                   </span>
                                   <span className="font-mono font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded text-xs">
-                                    {audit.council_scores.qwen ?? 0} / 30 pts
+                                    {(audit.council_scores.quant ?? audit.council_scores.qwen ?? 0)} / 30 pts
                                   </span>
                                 </div>
                                 <div className="space-y-1 text-[11px] text-amber-950">
@@ -3197,56 +3197,79 @@ export default function CommandCenterPage() {
                             </div>
                           </div>
                         ) : (
-                          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                              <div className="text-[10px] font-bold text-textMuted uppercase">HTF Regime</div>
-                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                                {breakdown.htf_regime?.score ?? 0} / 25
+                          <div className="mt-4 space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                              <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                                <div className="text-[10px] font-bold text-textMuted uppercase">HTF Regime</div>
+                                <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                  {breakdown.htf_regime?.score ?? 0} / 25
+                                </div>
+                                <div className="text-[10px] text-textMuted truncate mt-1">
+                                  {breakdown.htf_regime?.flaw_or_deduction || "Aligned"}
+                                </div>
                               </div>
-                              <div className="text-[10px] text-textMuted truncate mt-1">
-                                {breakdown.htf_regime?.flaw_or_deduction || "Aligned"}
+
+                              <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                                <div className="text-[10px] font-bold text-textMuted uppercase">LTF Location</div>
+                                <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                  {breakdown.ltf_location?.score ?? 0} / 25
+                                </div>
+                                <div className="text-[10px] text-textMuted truncate mt-1">
+                                  {breakdown.ltf_location?.flaw_or_deduction || "Verified"}
+                                </div>
+                              </div>
+
+                              <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                                <div className="text-[10px] font-bold text-textMuted uppercase">Momentum &amp; Vol</div>
+                                <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                  {breakdown.momentum_volume?.score ?? 0} / 15
+                                </div>
+                                <div className="text-[10px] text-textMuted truncate mt-1">
+                                  {breakdown.momentum_volume?.flaw_or_deduction || "Clean"}
+                                </div>
+                              </div>
+
+                              <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                                <div className="text-[10px] font-bold text-textMuted uppercase">News Catalyst</div>
+                                <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                  {breakdown.news_catalyst?.score ?? 0} / 20
+                                </div>
+                                <div className="text-[10px] text-textMuted truncate mt-1">
+                                  {breakdown.news_catalyst?.flaw_or_deduction || "Neutral"}
+                                </div>
+                              </div>
+
+                              <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
+                                <div className="text-[10px] font-bold text-textMuted uppercase">Intermarket Tide</div>
+                                <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
+                                  {breakdown.intermarket_tide?.score ?? 0} / 15
+                                </div>
+                                <div className="text-[10px] text-textMuted truncate mt-1">
+                                  {breakdown.intermarket_tide?.flaw_or_deduction || "BTC Flow"}
+                                </div>
                               </div>
                             </div>
 
-                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                              <div className="text-[10px] font-bold text-textMuted uppercase">LTF Location</div>
-                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                                {breakdown.ltf_location?.score ?? 0} / 25
+                            {/* Solo DeepSeek Debate & Notes */}
+                            {audit.deepseek_report?.debate && (
+                              <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50/40 text-xs space-y-1">
+                                {audit.deepseek_report.debate.bearish_devils_advocate && (
+                                  <div className="text-rose-700">
+                                    <strong className="font-semibold">🐻 Devil&apos;s Advocate:</strong> {audit.deepseek_report.debate.bearish_devils_advocate}
+                                  </div>
+                                )}
+                                {audit.deepseek_report.debate.bullish_defense && (
+                                  <div className="text-emerald-700">
+                                    <strong className="font-semibold">🐂 Defense:</strong> {audit.deepseek_report.debate.bullish_defense}
+                                  </div>
+                                )}
                               </div>
-                              <div className="text-[10px] text-textMuted truncate mt-1">
-                                {breakdown.ltf_location?.flaw_or_deduction || "Verified"}
-                              </div>
-                            </div>
-
-                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                              <div className="text-[10px] font-bold text-textMuted uppercase">Momentum &amp; Vol</div>
-                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                                {breakdown.momentum_volume?.score ?? 0} / 15
-                              </div>
-                              <div className="text-[10px] text-textMuted truncate mt-1">
-                                {breakdown.momentum_volume?.flaw_or_deduction || "Clean"}
-                              </div>
-                            </div>
-
-                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                              <div className="text-[10px] font-bold text-textMuted uppercase">News Catalyst</div>
-                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                                {breakdown.news_catalyst?.score ?? 0} / 20
-                              </div>
-                              <div className="text-[10px] text-textMuted truncate mt-1">
-                                {breakdown.news_catalyst?.flaw_or_deduction || "Neutral"}
-                              </div>
-                            </div>
-
-                            <div className="rounded border border-border bg-slate-50/70 p-3 text-center">
-                              <div className="text-[10px] font-bold text-textMuted uppercase">Intermarket Tide</div>
-                              <div className="font-bold text-brand-600 text-base mt-1 tabular-nums">
-                                {breakdown.intermarket_tide?.score ?? 0} / 15
-                              </div>
-                              <div className="text-[10px] text-textMuted truncate mt-1">
-                                {breakdown.intermarket_tide?.flaw_or_deduction || "BTC Flow"}
-                              </div>
-                            </div>
+                            )}
+                            {audit.deepseek_report?.execution_notes && (
+                              <p className="text-[11px] text-indigo-900 font-medium italic">
+                                📝 {audit.deepseek_report.execution_notes}
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
