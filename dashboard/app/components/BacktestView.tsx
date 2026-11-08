@@ -186,7 +186,14 @@ export default function BacktestView() {
         }),
       });
 
-      const data = await res.json();
+      const contentType = res.headers.get("content-type");
+      let data: any = null;
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const rawText = await res.text();
+        throw new Error(`Backtest service returned status ${res.status} (${res.statusText || "Non-JSON"}). Please retry in a few seconds.`);
+      }
 
       if (data.success && data.report) {
         setReport(data.report);
