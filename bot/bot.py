@@ -63,6 +63,7 @@ from strategies import (
     calc_indicators,
     calc_top_down_structure,
     detect_liquidity_pools,
+    detect_fractal_pivots,
     round_price_dynamic,
     format_price_dynamic
 )
@@ -888,8 +889,8 @@ def sync_account_telemetry(
         except Exception as exc:
             print(f"[telemetry] Binance sync notice: {exc}")
 
-    # 2. Bybit Telemetry
-    if mode in ("bybit", "dual") and bybit_client:
+    # 2. Bybit Telemetry (Active when exchange_mode is bybit/dual or Forex trading is enabled)
+    if (mode in ("bybit", "dual") or cfg.get("enable_forex_trading", True)) and bybit_client:
         try:
             if not sandbox and bybit_client.apiKey and bybit_client.secret:
                 b_bal = bybit_client.fetch_balance()
@@ -927,8 +928,11 @@ def sync_account_telemetry(
         res = supabase.table("trade_executions").select("pnl_usdt").gte("closed_at", today_start).execute()
         if res.data:
             daily_pnl = sum([float(t.get("pnl_usdt") or 0.0) for t in res.data])
-            if equity > 0:
-                daily_pnl_pct = round((daily_pnl / equity) * 100.0, 2)
+            # SAFEGUARD: Use realistic baseline capital (never divide by dust balances < $10)
+            virtual_equity = float(cfg.get("simulated_equity", 1000.0) or 1000.0)
+            baseline_capital = equity if (equity >= 10.0 and not sandbox) else max(virtual_equity, 10.0)
+            if baseline_capital > 0:
+                daily_pnl_pct = round((daily_pnl / baseline_capital) * 100.0, 2)
     except Exception:
         pass
 
@@ -2132,24 +2136,37 @@ def scan_and_execute_signals(
     # 0. P1 FIX: Daily Drawdown Circuit Breaker
     # If cumulative daily realized PnL drops below -2.5% (or configured daily_loss_limit_pct),
     # halt all new entries until next UTC day (00:00 UTC) to preserve capital.
+    equity = float(account_info.get("equity", 0.0) or 0.0)
+    virtual_equity = float(cfg.get("simulated_equity", 1000.0) or 1000.0)
+    MIN_LIVE_EQUITY = 10.0
+    has_live_balance = (equity >= MIN_LIVE_EQUITY) and not cfg.get("sandbox_mode", True)
+    is_zero_balance_mode = not has_live_balance and not cfg.get("sandbox_mode", True)
+    nominal_equity = equity if has_live_balance else virtual_equity
+
     daily_pnl_pct = float(account_info.get("daily_pnl_pct", 0.0) or 0.0)
     configured_daily_limit = -abs(float(cfg.get("daily_loss_limit_pct", 2.5) or 2.5))
     today_utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     global _DAILY_HALT_DATE
+
+    # Auto-repair absurd negative percentage artifacts (< -100%)
+    if daily_pnl_pct < -100.0:
+        daily_pnl_usdt = float(account_info.get("daily_pnl_usdt", 0.0) or 0.0)
+        daily_pnl_pct = round((daily_pnl_usdt / max(nominal_equity, 10.0)) * 100.0, 2)
 
     if daily_pnl_pct <= configured_daily_limit:
         if _DAILY_HALT_DATE != today_utc_date:
             _DAILY_HALT_DATE = today_utc_date
             alert_msg = f"🛑 DAILY DRAWDOWN LIMIT HIT ({daily_pnl_pct:+.2f}% <= {configured_daily_limit:.2f}%). All new trades halted until next UTC day (00:00 UTC) to preserve capital."
             print(f"[risk] {alert_msg}")
-            send_telegram_alert(cfg, alert_msg)
+            send_telegram_alert(cfg, "🛑 Daily Drawdown Circuit Breaker", alert_msg, level="PANIC")
         if _SCAN_HEARTBEAT_COUNT % 10 == 1:
             print(f"[risk] Daily Drawdown Circuit Breaker active ({daily_pnl_pct:+.2f}%). Scanning halted for today.")
         return
-    elif _DAILY_HALT_DATE and _DAILY_HALT_DATE != today_utc_date:
-        # Reset halt state on new UTC day
-        _DAILY_HALT_DATE = None
-        print(f"[risk] New UTC day detected ({today_utc_date}). Daily Drawdown Circuit Breaker reset.")
+    else:
+        # Reset halt state on new UTC day or when drawdown recovers
+        if _DAILY_HALT_DATE is not None:
+            print(f"[risk] ✅ Daily Drawdown Circuit Breaker cleared (Current daily PnL: {daily_pnl_pct:+.2f}% > {configured_daily_limit:.2f}%). Scanning resumed.")
+            _DAILY_HALT_DATE = None
 
     # 1. Blocked UTC Hours Check
     current_utc_hour = datetime.now(timezone.utc).hour
@@ -2160,7 +2177,7 @@ def scan_and_execute_signals(
     exchange_mode = str(cfg.get("exchange_mode", "binance")).lower()
     scan_targets: List[Tuple[str, str, Any]] = []
 
-    # 1. Binance Crypto
+    # 1. Binance Crypto Targets
     if exchange_mode in ("binance", "dual") and binance_client:
         symbols = cfg.get("symbols") or [
             "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
@@ -2169,8 +2186,17 @@ def scan_and_execute_signals(
         for s in symbols:
             scan_targets.append((s, "binance", binance_client))
 
-    # 2. Bybit Forex / CFDs
-    if exchange_mode in ("bybit", "dual") and bybit_client and cfg.get("enable_forex_trading", True):
+    # 2. Bybit Crypto Targets (when in Bybit-only mode)
+    if exchange_mode == "bybit" and bybit_client:
+        bybit_crypto = cfg.get("symbols") or [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"
+        ]
+        for s in bybit_crypto:
+            scan_targets.append((s, "bybit", bybit_client))
+
+    # 3. Bybit Forex / Commodities Targets
+    # If Forex is enabled in admin OR exchange_mode is bybit/dual, scan Forex pairs on Bybit
+    if (cfg.get("enable_forex_trading", True) or exchange_mode in ("bybit", "dual")) and bybit_client:
         fx_symbols = cfg.get("forex_symbols") or ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"]
         for s in fx_symbols:
             scan_targets.append((s, "bybit", bybit_client))
@@ -2184,18 +2210,18 @@ def scan_and_execute_signals(
         "RSI_Divergence_Reversal"
     ]
     quarantined_symbols = cfg.get("quarantined_symbols", [])
-    equity = float(account_info.get("equity", 0.0) or 0.0)
-    virtual_equity = float(cfg.get("simulated_equity", 1000.0) or 1000.0)
-    MIN_LIVE_EQUITY = 10.0
-    has_live_balance = (equity >= MIN_LIVE_EQUITY) and not cfg.get("sandbox_mode", True)
-    is_zero_balance_mode = not has_live_balance and not cfg.get("sandbox_mode", True)
-    nominal_equity = equity if has_live_balance else virtual_equity
 
     # Detect if bot is running in Zero-Balance Paper Mode or Live Margin Mode
     if is_zero_balance_mode and _SCAN_HEARTBEAT_COUNT % 4 == 1:
         print(f"[scanner] ⚡ Zero-Balance Paper Mode Active: Real exchange balance is ${equity:.2f} (< ${MIN_LIVE_EQUITY:.2f}). Acting like you have balance with ${virtual_equity:,.2f} virtual capital. Signals & Banker's Exits are simulated in real time with live win rate tracking.")
     elif has_live_balance and _SCAN_HEARTBEAT_COUNT % 4 == 1:
         print(f"[scanner] 🟢 Live Margin Mode Active: Real balance ${equity:.2f} detected on {exchange_mode.upper()}. Orders will execute natively on exchange.")
+
+    if _SCAN_HEARTBEAT_COUNT % 8 == 1:
+        fx_active = (cfg.get("enable_forex_trading", True) or exchange_mode in ("bybit", "dual")) and bybit_client is not None
+        fx_count = len(cfg.get("forex_symbols") or ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAU/USD"]) if fx_active else 0
+        crypto_count = len(scan_targets) - fx_count
+        print(f"[scanner] 📡 Watchlist Loaded: {len(scan_targets)} total pairs (Crypto: {crypto_count}, Bybit Forex/Metals: {fx_count}) across {exchange_mode.upper()} mode.")
 
     # P10 FIX: Filter eligible targets and prefetch OHLCV in parallel across symbols
     eligible_targets: List[Tuple[str, str, Any, str, bool]] = []

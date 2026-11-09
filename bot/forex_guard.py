@@ -161,18 +161,21 @@ def calculate_pip_distance(price1: float, price2: float, symbol: str) -> float:
 
 
 def calculate_forex_position_size(
-    equity: float,
-    risk_pct: float,
-    entry_price: float,
-    sl_price: float,
-    symbol: str,
-    max_leverage: int = 30
+    equity: float = 0.0,
+    risk_pct: float = 0.01,
+    entry_price: float = 0.0,
+    sl_price: float = 0.0,
+    symbol: str = "EUR/USD",
+    max_leverage: int = 30,
+    **kwargs
 ) -> float:
     """
     Calculates precise lot/unit position sizing so total risk strictly equals:
     equity * risk_pct (e.g. $10,000 * 1% = $100 risk).
     Enforces broker maximum leverage boundaries and Micro-Account Protections (<$100).
     """
+    if equity <= 0:
+        equity = float(kwargs.get("nominal_equity") or 0.0)
     if equity <= 0:
         equity = 1000.0  # Reference nominal equity for zero-balance paper tracking
 

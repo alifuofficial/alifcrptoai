@@ -94,6 +94,7 @@ interface BotConfig {
   active_strategies: string[];
   timeframe: string;
   risk_pct: number;
+  daily_loss_limit_pct?: number;
   simulated_equity?: number;
   target_rr?: number;
   min_score: number;
@@ -1069,6 +1070,7 @@ export default function CommandCenterPage() {
         forex_weekend_shield: Boolean(formSettings.forex_weekend_shield ?? true),
         forex_rollover_shield: Boolean(formSettings.forex_rollover_shield ?? true),
         forex_max_spread_pips: Number(formSettings.forex_max_spread_pips ?? 3.5),
+        daily_loss_limit_pct: Number(formSettings.daily_loss_limit_pct ?? 2.5),
         ai_provider: formSettings.ai_provider || "council_3model",
         gemini_api_key_override: formSettings.gemini_api_key_override?.trim() || null,
         gemini_model: formSettings.gemini_model || "gemini-3.5-flash",
@@ -2151,15 +2153,30 @@ export default function CommandCenterPage() {
                     )}
                   </div>
                   <div>
-                    <div
-                      className={`text-3xl font-bold tabular-nums tracking-tight ${
-                        (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
-                      }`}
-                    >
-                      {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "+" : ""}$
-                      {Number(latestSnapshot?.daily_pnl_usdt || 0).toFixed(2)}
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <div
+                        className={`text-3xl font-bold tabular-nums tracking-tight ${
+                          (latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
+                        }`}
+                      >
+                        {(latestSnapshot?.daily_pnl_usdt || 0) >= 0 ? "+" : ""}$
+                        {Number(latestSnapshot?.daily_pnl_usdt || 0).toFixed(2)}
+                      </div>
+                      <span className={`text-xs font-semibold tabular-nums ${
+                        (latestSnapshot?.daily_pnl_pct || 0) >= 0 ? "text-emerald-600" : "text-rose-600"
+                      }`}>
+                        ({(latestSnapshot?.daily_pnl_pct || 0) >= 0 ? "+" : ""}
+                        {Number(latestSnapshot?.daily_pnl_pct || 0).toFixed(2)}%)
+                      </span>
                     </div>
-                    <div className="text-xs text-textMuted mt-2 font-medium">Closed trades since 00:00 UTC</div>
+                    {(latestSnapshot?.daily_pnl_pct || 0) <= -(config?.daily_loss_limit_pct ?? 2.5) ? (
+                      <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 border border-rose-200 text-rose-700 animate-pulse">
+                        <AlertTriangle className="w-3 h-3 text-rose-600" />
+                        <span>Drawdown Circuit Breaker Active (&le; -{config?.daily_loss_limit_pct ?? 2.5}%)</span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-textMuted mt-2 font-medium">Closed trades since 00:00 UTC (Limit: -{config?.daily_loss_limit_pct ?? 2.5}%)</div>
+                    )}
                   </div>
                 </div>
 
@@ -4304,7 +4321,26 @@ export default function CommandCenterPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t border-border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-border">
+                  <div>
+                    <label className="block text-xs font-semibold text-textMain mb-1.5 flex items-center justify-between">
+                      <span>Daily Drawdown Limit</span>
+                      <span className="text-[10px] text-rose-600 font-mono font-bold">-{formSettings.daily_loss_limit_pct ?? 2.5}%</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      max="25"
+                      value={formSettings.daily_loss_limit_pct ?? 2.5}
+                      onChange={(e) =>
+                        setFormSettings({ ...formSettings, daily_loss_limit_pct: parseFloat(e.target.value) || 2.5 })
+                      }
+                      className="w-full rounded-md border border-border bg-slate-50 py-2 px-3 text-xs text-textMain font-mono focus:border-brand-500 focus:bg-white focus:outline-hidden"
+                    />
+                    <span className="text-[10px] text-textMuted">Halts new trades if daily loss hits limit (Default: 2.5%)</span>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-textMain mb-1.5">
                       Max Directional Exposure Pct
@@ -4609,8 +4645,11 @@ export default function CommandCenterPage() {
                       className="h-4 w-4 rounded border-border text-amber-600 focus:ring-0"
                     />
                     <div>
-                      <span className="text-xs font-medium text-textMain block">Enable Forex Scanning</span>
-                      <span className="text-[10px] text-textMuted">Activates Bybit currency engine</span>
+                      <span className="text-xs font-medium text-textMain block flex items-center gap-1.5">
+                        <span>Enable Forex &amp; Metals Scanning</span>
+                        <span className="bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-amber-300">BYBIT UTA</span>
+                      </span>
+                      <span className="text-[10px] text-textMuted">Runs Bybit currency &amp; metals scanner alongside Binance or Bybit crypto</span>
                     </div>
                   </label>
 
